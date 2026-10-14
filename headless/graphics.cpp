@@ -58,9 +58,13 @@ double LoadingCalm() {
 // a picture, which is what the counters inside them are built for (performance.cpp).
 HudMachine MachineNow() {
     HudMachine machine;
-    machine.cpu = Performance::HostCpuPercent();
+    // The four emulated cores when they can be read, else the app's share of every CPU.
+    Performance::GuestCoreLoads(machine.cores);
+    if (machine.cores[0] == ~0u && machine.cores[1] == ~0u && machine.cores[2] == ~0u && machine.cores[3] == ~0u)
+        machine.cpu = Performance::HostCpuPercent();
     machine.gpu = Performance::GpuBusyPercent();
     Performance::MemoryPool(&machine.memory_free, &machine.memory_total);
+    if (const auto held = Performance::graphics_memory_held.load(std::memory_order_relaxed)) machine.graphics = held();
     return machine;
 }
 std::atomic<bool> hud_enabled{true};
@@ -69,12 +73,14 @@ std::atomic<bool> hud_enabled{true};
 // renderer thread, so they are set with the session's preferences the same way hud_enabled is.
 std::atomic<int> hud_size{0};
 std::atomic<int> hud_corner{0};
-std::atomic<bool> hud_colors{false};
+std::atomic<bool> hud_colors{true};
 std::atomic<int> hud_fields{0xff};
 // What the session's settings say the overlay should look like, for all of them at once.
 void LoadHudPreferences() {
     const auto prefs = PreferencesFor(session_title.load());
     hud_enabled.store(prefs.hud, std::memory_order_relaxed);
+    // The GPU is only timed while the overlay shows its share.
+    Performance::gpu_time_wanted.store(prefs.hud && (prefs.hud_fields & kHudFieldGpu) != 0, std::memory_order_relaxed);
     hud_size.store(prefs.hud_size, std::memory_order_relaxed);
     hud_corner.store(prefs.hud_corner, std::memory_order_relaxed);
     hud_colors.store(prefs.hud_colors, std::memory_order_relaxed);
@@ -343,9 +349,12 @@ public:
             speed_percent = stats.emulation_speed * 100.0;
             last_stats = now;
         }
-        const auto text = FormatHudText(clock, speed_percent, "OGL", MachineNow(),
-                                        RoomPingMilliseconds());
-        if (hud_enabled.load(std::memory_order_relaxed)) DrawHud(text.data(), false);
+        // Nothing is measured or written while the overlay is off.
+        if (hud_enabled.load(std::memory_order_relaxed)) {
+            const auto text = FormatHudText(clock, speed_percent, "OGL", MachineNow(), RoomPingMilliseconds(),
+                                            static_cast<uint32_t>(hud_fields.load(std::memory_order_relaxed)));
+            DrawHud(text.data(), false);
+        }
         Check(eglSwapBuffers(display, surface), "eglSwapBuffers");
     }
     void PresentLoading() {
@@ -579,6 +588,9 @@ private:
 void ToggleHud() {
     const bool enabled = !hud_enabled.load(std::memory_order_relaxed);
     hud_enabled.store(enabled, std::memory_order_relaxed);
+    Performance::gpu_time_wanted.store(
+        enabled && (hud_fields.load(std::memory_order_relaxed) & static_cast<int>(kHudFieldGpu)) != 0,
+        std::memory_order_relaxed);
     // A game with its own FPS overlay setting keeps the change for itself.
     const uint64_t title = session_title.load();
     if (auto game = LoadGameSettings(title); title && game.hud >= 0) {
@@ -736,7 +748,8 @@ void GraphicsWindow::OnFrameDisplayed() {
         }
         vulkan_hud =
             MakeHudSnapshot(vulkan_hud_clock, vulkan_hud_output_clock, vulkan_hud_speed,
-                            MachineNow(),
+                            // Nothing is measured while the overlay is off.
+                            hud_enabled.load(std::memory_order_relaxed) ? MachineNow() : HudMachine{},
                             Eden::Display::output_millihertz.load(std::memory_order_relaxed) / 1000.0,
                             RoomPingMilliseconds(), hud_size.load(std::memory_order_relaxed),
                             hud_corner.load(std::memory_order_relaxed),

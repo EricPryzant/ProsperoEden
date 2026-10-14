@@ -68,9 +68,12 @@ inline constexpr int kHudCornerCount = 4;
 // memory pool that could not be read as a size of 0.
 struct HudMachine {
     unsigned cpu = ~0u;
+    // The four emulated cores, each as a share of one CPU: shown instead of `cpu` when known.
+    unsigned cores[4] = {~0u, ~0u, ~0u, ~0u};
     unsigned gpu = ~0u;
     unsigned long long memory_free = 0;
     unsigned long long memory_total = 0;
+    unsigned long long graphics = 0;  // of what is taken, what the graphics hold; 0: not known
 };
 // The overlay's line and where its box goes, in a picture 1080 rows high. Where it is drawn they
 // are scaled to the picture, and `width` then carries the picture's height to the shader instead
@@ -113,6 +116,10 @@ inline constexpr uint32_t kHudFieldCpu = 1u << 4;
 inline constexpr uint32_t kHudFieldGpu = 1u << 5;
 inline constexpr uint32_t kHudFieldMem = 1u << 6;
 inline constexpr uint32_t kHudFieldPing = 1u << 7;
+// Not a piece of its own but how the CPU piece reads: set, only the busiest of the four emulated
+// cores (the one that holds a game back); clear, as in every setting saved before there was a
+// choice, each of the four.
+inline constexpr uint32_t kHudFieldOneCore = 1u << 8;
 inline constexpr uint32_t kHudFieldAll = 0xffu;
 // True while the snapshot is the loading screen rather than the overlay's line.
 inline bool HudLoading(const HudSnapshot& hud) {
@@ -224,7 +231,7 @@ struct LoadingPace {
         return true;
     }
 };
-// The line the overlay shows: "VLK 27FPS 37.0MS CPU 55% GPU 43% MEM 4.1/8.0G". The rate the
+// The line the overlay shows: "VLK 27FPS 37.0MS CPU 55% GPU 43% MEM 4.1/8.0G GFX 2.5G". The rate the
 // guest itself produces, and the rate the display shows when they differ (with frame generation
 // the display is handed frames the guest never made, and never more than `refresh`, its own
 // rate; refresh 0: not known, no limit); then the worst frame of the last second, how far behind
@@ -280,8 +287,27 @@ inline std::array<char, kHudTextMax + 1> FormatHudText(const HudClock& clock, co
     if (machine.cpu != ~0u) std::snprintf(cpu, sizeof(cpu), "%u", machine.cpu);
     if (machine.gpu != ~0u) std::snprintf(gpu, sizeof(gpu), "%u", machine.gpu);
     if (fields & kHudFieldCpu) {
-        std::snprintf(piece, sizeof(piece), " CPU %s%%", cpu);
-        put(piece);
+        const bool by_core = machine.cores[0] != ~0u || machine.cores[1] != ~0u || machine.cores[2] != ~0u ||
+                             machine.cores[3] != ~0u;
+        if (by_core && (fields & kHudFieldOneCore) != 0) {
+            // Only the busiest core.
+            unsigned busiest = 0;
+            for (const unsigned load : machine.cores)
+                if (load != ~0u && load > busiest) busiest = load;
+            std::snprintf(piece, sizeof(piece), " CPU %u%%", busiest);
+            put(piece);
+        } else if (by_core) {
+            // Each core with its own sign, so each is coloured by its own load.
+            put(" CPU");
+            for (const unsigned load : machine.cores) {
+                if (load != ~0u) std::snprintf(piece, sizeof(piece), " %u%%", load);
+                else std::snprintf(piece, sizeof(piece), " --%%");
+                put(piece);
+            }
+        } else {
+            std::snprintf(piece, sizeof(piece), " CPU %s%%", cpu);
+            put(piece);
+        }
     }
     if (fields & kHudFieldGpu) {
         std::snprintf(piece, sizeof(piece), " GPU %s%%", gpu);
@@ -290,11 +316,19 @@ inline std::array<char, kHudTextMax + 1> FormatHudText(const HudClock& clock, co
     if (fields & kHudFieldMem) {
         char memory[40] = "--/--";
         if (machine.memory_total != 0)
+            // What is taken of the pool, then the pool: the order a player expects ("4.1 of
+            // 8.0"), in the binary gigabytes the rest of the app counts the pool in.
             std::snprintf(memory, sizeof(memory), "%.1f/%.1fG",
-                          static_cast<double>(machine.memory_free) / 1e9,
-                          static_cast<double>(machine.memory_total) / 1e9);
+                          static_cast<double>(machine.memory_total - std::min(machine.memory_free, machine.memory_total)) /
+                              1073741824.0,
+                          static_cast<double>(machine.memory_total) / 1073741824.0);
         std::snprintf(piece, sizeof(piece), " MEM %s", memory);
         put(piece);
+        // The graphics' part of it: the one that grows as scenery loads.
+        if (machine.graphics != 0) {
+            std::snprintf(piece, sizeof(piece), " GFX %.1fG", static_cast<double>(machine.graphics) / 1073741824.0);
+            put(piece);
+        }
     }
     if ((fields & kHudFieldPing) && ping_ms >= 0) {
         std::snprintf(piece, sizeof(piece), " P%d", std::min(ping_ms, 9999));

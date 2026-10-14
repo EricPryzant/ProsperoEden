@@ -123,8 +123,29 @@ int main() {
     Eden::HudMachine known;
     known.cpu = 55;
     known.gpu = 43;
-    known.memory_free = 4100000000ULL;
-    known.memory_total = 8000000000ULL;
+    known.memory_free = 4187593114ULL;   // 4.1 GiB of the 8.0 are taken
+    known.memory_total = 8589934592ULL;
+    // The four emulated cores take the place of the one share when they are known.
+    {
+        Eden::HudMachine by_core = known;
+        by_core.cores[0] = 92; by_core.cores[1] = 45; by_core.cores[2] = 38; by_core.cores[3] = 3;
+        assert(std::string_view(Eden::FormatHudText(clock, 100, "VLK", by_core).data())
+               == "VLK 60FPS 17.0MS CPU 92% 45% 38% 3% GPU 43% MEM 4.1/8.0G");
+        // With that switch off, only the busiest of them.
+        assert(std::string_view(Eden::FormatHudText(clock, 100, "VLK", by_core, -1,
+                                                    Eden::kHudFieldAll | Eden::kHudFieldOneCore).data())
+               == "VLK 60FPS 17.0MS CPU 92% GPU 43% MEM 4.1/8.0G");
+        by_core.cores[3] = ~0u;
+        assert(std::string_view(Eden::FormatHudText(clock, 100, "VLK", by_core).data())
+               == "VLK 60FPS 17.0MS CPU 92% 45% 38% --% GPU 43% MEM 4.1/8.0G");
+    }
+    // The graphics' part follows the pool when it is known.
+    {
+        Eden::HudMachine with_graphics = known;
+        with_graphics.graphics = 2684354560ULL;  // 2.5 GiB
+        assert(std::string_view(Eden::FormatHudText(clock, 100, "VLK", with_graphics).data())
+               == "VLK 60FPS 17.0MS CPU 55% GPU 43% MEM 4.1/8.0G GFX 2.5G");
+    }
     // A full 100% speed is not worth saying; anything else is.
     assert(std::string_view(Eden::FormatHudText(clock, 98, "VLK", known).data())
            == "VLK 60FPS 17.0MS 98% CPU 55% GPU 43% MEM 4.1/8.0G");

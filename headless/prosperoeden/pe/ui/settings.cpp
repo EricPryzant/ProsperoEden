@@ -87,6 +87,7 @@ enum HudRow : int
     hud_gpu_row,
     hud_mem_row,
     hud_ping_row,
+    hud_cores_row, // the CPU piece as each of the four cores (its bit clear), or only the busiest
     kHudRows,
 };
 constexpr int kFrameGenTargets = 6;     // Auto, 60, 90, 120, 144, 240 Hz (settings_store.h)
@@ -1070,7 +1071,8 @@ void Launcher::draw_hud(Canvas &c, float open)
 
     static constexpr const char *kNames[kHudRows] = {
         TR("Enable colors"), TR("Size"), TR("Corner"), TR("Backend"), TR("FPS"),
-        TR("Frame time"), TR("Speed"), TR("CPU"), TR("GPU"), TR("Memory"), TR("Ping")};
+        TR("Frame time"), TR("Speed"), TR("CPU"), TR("GPU"), TR("Memory"), TR("Ping"),
+        TR("CPU by core")};
     for (int row = hud_rows_.first_row(); row <= hud_rows_.last_row(); ++row)
     {
         list.push_opacity(hud_rows_.row_alpha(row, kVideoRowHeight));
@@ -1088,7 +1090,8 @@ void Launcher::draw_hud(Canvas &c, float open)
         else
         {
             // One of the line's pieces, on or off.
-            const bool on = (prefs_.hud_fields & (1 << (row - hud_backend_row))) != 0;
+            // "CPU by core" is on while its bit is clear: on in every setting saved before it.
+            const bool on = ((prefs_.hud_fields & (1 << (row - hud_backend_row))) != 0) != (row == hud_cores_row);
             label(row, tr(kNames[row]), kToggle);
             toggle(c, 1292.0f, row_centre(row), on ? 1.0f : 0.0f);
         }

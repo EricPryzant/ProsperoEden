@@ -16,6 +16,11 @@ void SetSecondaryPlacement(bool enabled);
 void PlatformChecks();
 // Main thread only, between GPU readiness and guest shutdown.
 void Snapshot();
+// How busy each of the four emulated cores' threads was over the last quarter of a second, as a
+// percentage of one CPU (~0u: not known). A game is limited by these four, each on a CPU of
+// its own, so the busiest of them says whether the CPU is what holds a game back; a share of
+// every CPU of the console (HostCpuPercent) stays low even then.
+void GuestCoreLoads(unsigned loads[4]);
 // GPU worker only: firmware rejects cross-thread CPU-time sampling.
 void SampleGpuFrame(unsigned frame);
 // What the overlay's line says about the machine (hud.h, HudMachine). The two percentages are
@@ -25,6 +30,13 @@ void SampleGpuFrame(unsigned frame);
 // those as "--".
 unsigned HostCpuPercent();
 unsigned GpuBusyPercent();
+// The GPU's own time, by timestamps the Vulkan scheduler writes at the start and the end of
+// each command buffer while the overlay asks for them (tools/prepare-vulkan-port.py): the
+// nanoseconds the GPU has spent between them, how many command buffers that is, and whether
+// the driver gave up on them.
+inline std::atomic<bool> gpu_time_wanted{false};
+inline std::atomic<unsigned long long> gpu_time_busy_ns{0}, gpu_time_results{0};
+inline std::atomic<bool> gpu_time_failed{false};
 void MemoryPool(unsigned long long* free_bytes, unsigned long long* total_bytes);
 #ifdef EDEN_DEV_PROFILE
 void BeginPcSampling();
@@ -352,6 +364,10 @@ inline std::atomic<bool (*)()> graphics_memory_probe{nullptr};
 // caches evict at half the use they were set to. dev-settings graphics_usage=driver restores
 // the driver's count.
 inline std::atomic<unsigned long long (*)()> graphics_memory_free{nullptr};
+// The memory the graphics allocator holds in its blocks now, installed by the Vulkan renderer
+// while it has an allocator (tools/prepare-vulkan-port.py): the part of the pool that grows as
+// scenery loads, and the one the FPS overlay shows beside the pool.
+inline std::atomic<unsigned long long (*)()> graphics_memory_held{nullptr};
 inline std::atomic<bool> graphics_usage_from_pool{true};
 // GPU thread only (the collector).
 inline bool KeepDirtyTextures() {
