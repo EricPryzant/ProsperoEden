@@ -523,6 +523,31 @@ void CheckPad() {
             for (int i = 0; i < 30; ++i) consume();
             CHECK(!pad.Engine().GetButton({}, 10)); CHECK(!pad.Engine().GetButton({}, 11));
         }
+        // Both shortcuts, both sides, and either order (including one simultaneous sample).
+        for (unsigned x : {100u, 1500u}) {
+            for (ButtonMask shoulder : {kButtonL1, kButtonR1}) {
+                for (int order = 0; order < 3; ++order) {
+                    sample.buttons = 0; sample.touch = {}; consume();
+                    for (int i = 0; i < 30; ++i) consume();
+                    sample.touch.count = 1; sample.touch.points[0].x = x;
+                    if (order != 0) {
+                        sample.buttons = order == 1 ? kButtonTouchPad : shoulder;
+                        consume();
+                    }
+                    sample.buttons = kButtonTouchPad | shoulder; consume();
+                    CHECK(pad.TakeHudToggle() == (x < 960 && shoulder == kButtonR1));
+                    CHECK(pad.TakeReturnToMenu() == (x < 960 && shoulder == kButtonL1));
+                    // Crossing the midpoint while held must not change the latched side.
+                    sample.touch.points[0].x = x < 960 ? 1500 : 100; consume();
+                    CHECK(!pad.TakeHudToggle()); CHECK(!pad.TakeReturnToMenu());
+                    CHECK(pad.Engine().GetButton({}, shoulder == kButtonL1 ? 6 : 7) == (x >= 960));
+                    sample.buttons = 0; sample.touch = {}; consume();
+                    CHECK(pad.Engine().GetButton({}, 10) == (x >= 960));
+                    CHECK(!pad.Engine().GetButton({}, 11));
+                    for (int i = 0; i < 30; ++i) consume();
+                }
+            }
+        }
         sample.touch.count = 1; sample.touch.points[0].x = 1500;
         sample.buttons = kButtonTouchPad;
         for (int i = 0; i < 65; ++i) consume();
@@ -535,7 +560,8 @@ void CheckPad() {
             CHECK(std::none_of(edges.begin(), edges.end(), [](bool down) { return !down; }));
         }
         sample.buttons |= kButtonR1; consume();
-        CHECK(pad.TakeHudToggle()); CHECK(!pad.Engine().GetButton({}, 10));
+        CHECK(!pad.TakeHudToggle()); CHECK(pad.Engine().GetButton({}, 10));
+        CHECK(pad.Engine().GetButton({}, 7));
         sample.buttons = 0; sample.touch = {}; consume();
         CHECK(!pad.Engine().GetButton({}, 10)); CHECK(!pad.Engine().GetButton({}, 11));
         auto button = Common::Input::CreateInputDeviceFromString("engine:virtual_gamepad,port:0,button:0");

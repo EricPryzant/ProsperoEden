@@ -328,19 +328,8 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
     for (const auto& raw : samples) {
         if (recording) GameplayTest::Record(raw);
         auto sample = is_usable(raw) ? raw : neutral_data(raw.timestamp_us);
-        // The shortcuts work from every controller.
-        constexpr ButtonMask menu_chord = kButtonTouchPad | kButtonL1;
-        constexpr ButtonMask hud_chord = kButtonTouchPad | kButtonR1;
         const auto pressed = sample.buttons;
-        if ((pressed & menu_chord) == menu_chord &&
-            (last_buttons & menu_chord) != menu_chord)
-            return_to_menu = true;
-        if ((pressed & hud_chord) == hud_chord &&
-            (last_buttons & hud_chord) != hud_chord)
-            hud_toggle = true;
-        if ((pressed & menu_chord) == menu_chord || (pressed & hud_chord) == hud_chord)
-            sample.buttons &= ~(kButtonTouchPad | kButtonL1 | kButtonR1);
-        // The touchpad on its own: see kSelectTapPolls.
+        // Latch the click side before checking shortcuts, including simultaneous presses.
         const bool touch = (pressed & kButtonTouchPad) != 0;
         const bool touched = (last_buttons & kButtonTouchPad) != 0;
         if (touch && !touched) {
@@ -351,7 +340,18 @@ void Pad::Consume(std::size_t player, std::span<const ps5::pad::Data> samples) {
                 sample.touch.points[0].x < slot.touch_width &&
                 sample.touch.points[0].x >= slot.touch_width / 2;
         }
-        if (touch && (pressed & (kButtonL1 | kButtonR1)) != 0) {
+        // Only the Select (left) side owns shortcuts; the right side remains game input.
+        constexpr ButtonMask menu_chord = kButtonTouchPad | kButtonL1;
+        constexpr ButtonMask hud_chord = kButtonTouchPad | kButtonR1;
+        const bool menu = !slot.touch_right && (pressed & menu_chord) == menu_chord;
+        const bool hud = !slot.touch_right && (pressed & hud_chord) == hud_chord;
+        if (menu && (last_buttons & menu_chord) != menu_chord)
+            return_to_menu = true;
+        if (hud && (last_buttons & hud_chord) != hud_chord)
+            hud_toggle = true;
+        if (menu || hud)
+            sample.buttons &= ~(kButtonTouchPad | kButtonL1 | kButtonR1);
+        if (menu || hud) {
             slot.touch_chord = true;
             slot.select_held = false;
         }
