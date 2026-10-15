@@ -64,6 +64,13 @@ target_include_directories(dynarmic BEFORE PRIVATE "${PORT_BUILD_DIR}/jit-checks
 # Let the existing compiler inline across the JIT's translation units. Keep the
 # rest of the native application on its qualified non-LTO build path.
 target_compile_options(dynarmic PRIVATE -flto=thin)
+if(PS5_NATIVE)
+    # The GPU thread's per-draw work (command processing, buffer/texture caches) spans
+    # video_core's translation units, and the console's CPU is a Zen 2 (AVX2, BMI2, LZCNT/TZCNT).
+    # Not common or core: with them a title never reached its first frame (their fiber switches
+    # move guest threads between host threads, which cross-unit inlining may not survive).
+    target_compile_options(video_core PRIVATE -flto=thin -march=znver2)
+endif()
 if(NOT PS5_NATIVE)
     target_link_options(dynarmic INTERFACE -fuse-ld=lld-18)
 endif()
