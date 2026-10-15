@@ -224,6 +224,7 @@ std::string RunApp(const std::string& launch_error, bool first_start, Eden::Mult
         pe::ui::Textures textures(batch, services);
         // The look the player chose names the artwork (pe/ui/theme.hpp).
         pe::ui::use_theme(services.preferences().theme);
+        pe::ui::use_accent(services.preferences().accent);
         if (!textures.load_art(Eden::AppFile("ui")))
             Eden::Report("menu", "Launcher art is incomplete; check the app's ui/art folder");
         // The picture the console is showing now, for the opening.

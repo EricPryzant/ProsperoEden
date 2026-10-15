@@ -509,6 +509,7 @@ class Services
     virtual const std::vector<std::string> &language_labels() = 0;
     virtual std::string language_region(int language) = 0;
     virtual std::string setup_details() = 0;
+    virtual std::string crash_reports_folder() { return {}; }
 
     // ---- game files ----
     // The subfolder names of a folder; false when it cannot be opened.

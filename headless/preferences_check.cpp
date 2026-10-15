@@ -41,6 +41,18 @@ int main() {
     assert(Eden::LoadPreferences(file).backend == Eden::GraphicsBackend::Vulkan);
     assert(Eden::LoadPreferences(file).hud);
 
+    // Appearance survives reopening and an unrelated settings write.
+    {
+        Eden::Preferences value;
+        value.theme = "slate"; value.accent = "ice";
+        assert(Eden::SavePreferences(value, file));
+        auto reopened = Eden::LoadPreferences(file);
+        assert(reopened.theme == "slate" && reopened.accent == "ice");
+        reopened.volume = 75;
+        assert(Eden::SavePreferences(reopened, file));
+        assert(Eden::LoadPreferences(file).accent == "ice");
+    }
+
     // Preferences round trip and validation.
     assert(Eden::SavePreferences({false, 40, true, true, Eden::GraphicsBackend::OpenGL}, file));
     auto saved = Eden::LoadPreferences(file);

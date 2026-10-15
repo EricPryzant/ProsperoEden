@@ -6,6 +6,7 @@
 #include "pe/gfx/gl_program.hpp"
 #include "pe/ui/runtime_launcher.hpp"
 #include "pe/ui/runtime_models.hpp"
+#include "pe/ui/theme.hpp"
 #include <EGL/egl.h>
 #include <EGL/eglext.h>
 #include <GL/glcorearb.h>
@@ -89,6 +90,8 @@ int main(int argc,char**argv) {
             else if(command=="loading"){loading(arg.empty()?0.5f:std::stof(arg));}
             else if(command=="status"){std::cout<<"STATE active="<<launcher.active_id()<<" done="<<launcher.done()<<" game="<<launcher.selected_game()<<" error="<<launcher.error()<<std::endl;}
             else if(command=="picker"){launcher.open_picker();tick(2);}
+            else if(command=="appearance"){std::cout<<"APPEARANCE "<<services.preferences().theme<<" "<<services.preferences().accent<<" "<<pe::ui::accent_index()<<std::endl;}
+            else if(command=="crash"){services.crash_report=arg;launcher.select("builtin");tick(120);}
             else if(command=="prefs"){std::cout<<"PREFERENCES "<<nlohmann::json(services.preferences()).dump()<<std::endl;}
             else if(command=="profiles"){std::cout<<"PROFILES "<<nlohmann::json(services.profiles()).dump()<<std::endl;}
             else if(command=="launches"){std::cout<<"LAUNCHES "<<services.launches.dump()<<std::endl;}

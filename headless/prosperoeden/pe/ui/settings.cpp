@@ -524,7 +524,7 @@ float Launcher::dialog_row_top(Modal modal, int row) const
     case Modal::theme:
         return 370.0f + 102.0f * static_cast<float>(row);
     case Modal::accent:
-        return 274.0f + 80.0f * static_cast<float>(row);
+        return 340.0f + 50.0f * static_cast<float>(row);
     case Modal::performance: // four of its rows show; the list scrolls to the others
         return kVideoRowsTop + kVideoRowPitch * static_cast<float>(row) - performance_rows_.scroll();
     case Modal::video: // five of its rows show; the list scrolls to the others
@@ -609,7 +609,7 @@ void Launcher::press_dialog(Key key)
         const std::string had = prefs_.theme;
         const std::string had_accent = prefs_.accent;
         prefs_.theme = chosen.id;
-        prefs_.accent.clear(); // a preset belongs to one theme
+        if (had != prefs_.theme) prefs_.accent.clear(); // keep the colour when reselecting this theme
         const bool saved = save_preferences(true);
         if (saved)
         {
@@ -617,7 +617,7 @@ void Launcher::press_dialog(Key key)
             settings_.visible = th().list_settings ? 10 : kCategoryCount;
             settings_.pitch = th().list_settings ? 84.0f : 88.0f;
             settings_.reset(kCategoryCount, settings_.selected);
-            use_accent("");
+            use_accent(prefs_.accent);
         }
         else
         {
@@ -851,7 +851,8 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
         break;
     default:
         title = tr("Diagnostics");
-        copy = tr("Detailed logs apply to the next game launch.");
+        copy = option_ == 0 ? tr("Detailed logs apply to the next game launch.") :
+                             tr("Keeps the last line before a crash, but games stutter. From the next start.");
         break;
     }
     text_shrink(c, title, 592.0f, baseline(218.0f, 62.0f, th().size_display), th().size_display,
@@ -875,7 +876,7 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
     const int last = scrolls ? rows_view.last_row() : rows - 1;
     if (scrolls)
         list.push_clip({window.x - 24.0f, window.y - 6.0f, window.w + 48.0f, window.h + 12.0f});
-    const float row_h = modal == Modal::accent ? 72.0f : 94.0f;
+    const float row_h = modal == Modal::accent ? 46.0f : 94.0f;
     for (int row = first; row <= last; ++row)
     {
         list.push_opacity(scrolls ? rows_view.row_alpha(row, kVideoRowHeight) : 1.0f);
@@ -1165,10 +1166,12 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             toggle(c, 1292.0f, row_centre(row),
                    tween::clamp01(switches_[static_cast<std::size_t>(row)].value));
         }
-        // What the highlighted switch does.
-        text_block(c, tr(kAbout[std::clamp(option_, 0, 1)]), 592.0f,
-                   baseline(716.0f, 30.0f, th().size_small), th().size_small, 30.0f, th().meta, 736.0f,
-                   2, kShrink);
+        // The folder stays available after the startup notice is gone.
+        const std::string reports = services_.crash_reports_folder();
+        text_block(c, reports.empty() ? std::string{tr(kAbout[std::clamp(option_, 0, 1)])} :
+                       fill(tr("Crash reports (FTP): {0}\nAttach crash-*.txt and its matching logs to your issue."), {reports}),
+                   592.0f, baseline(716.0f, 26.0f, th().size_small),
+                   th().size_small, 26.0f, th().body, 736.0f, 3, kShrink);
         break;
     }
     }

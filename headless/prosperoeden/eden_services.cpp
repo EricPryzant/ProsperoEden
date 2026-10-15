@@ -1086,6 +1086,8 @@ std::string EdenServices::language_region(int language) {
     return tr(kRegions[Eden::kLanguageRegions[language]]);
 }
 
+std::string EdenServices::crash_reports_folder() { return Eden::LogsDir(); }
+
 std::string EdenServices::setup_details() {
     return setup_.empty() ?
         tr("Keys and firmware: startup checks passed. Game-specific compatibility is checked at launch.") :
