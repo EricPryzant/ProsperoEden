@@ -529,6 +529,10 @@ class Services
         return {};
     }
     // The profile games start with from now on.
+    virtual std::string profile_key(int index) {
+        const auto list=profiles();
+        return index>=0 && index<static_cast<int>(list.size()) ? std::to_string(index)+":"+list[index].name : std::string{};
+    }
     virtual bool choose_profile(int)
     {
         return false;

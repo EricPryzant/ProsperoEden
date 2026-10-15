@@ -812,6 +812,11 @@ std::vector<pe::ui::Profile> EdenServices::profiles() {
     return list;
 }
 
+std::string EdenServices::profile_key(int index) {
+    const auto who=Eden::Profiles::Resolve(user_);
+    return index>=0 && index<static_cast<int>(who.profiles.size()) ? who.profiles[index].Key() : std::string{};
+}
+
 bool EdenServices::choose_profile(int index) {
     if (rooms_.GetSnapshot().phase != Eden::Multiplayer::Phase::Idle) return false;
     const auto who = Eden::Profiles::Resolve(user_);

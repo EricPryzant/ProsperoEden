@@ -31,13 +31,13 @@ enum Category
     kDownloads,
     kSaveSync,
     kLanguage,
-    kTheme,
+    kAppearance,
     kColour,
     kCategoryCount,
 };
 constexpr const char *kCategories[kCategoryCount] = {
     TR("Profiles"), TR("Video"), TR("Performance"), TR("Audio"), TR("Controls"), TR("Accessibility"),
-    TR("Diagnostics"), TR("Game files"), TR("Downloads"), TR("Save sync"), TR("Language"), TR("Theme"),
+    TR("Diagnostics"), TR("Game files"), TR("Downloads"), TR("Save sync"), TR("Language"), TR("Appearance"),
     TR("Colour")};
 constexpr Icon kIcons[kCategoryCount] = {
     Icon::profile, Icon::video, Icon::performance, Icon::audio, Icon::controls, Icon::accessibility,
@@ -179,6 +179,9 @@ void Launcher::press_settings(Key key)
     const int before = at;
     switch (key)
     {
+    case Key::options:
+        launcher_picker_ = true;
+        return;
     case Key::circle:
         go_section(0);
         return;
@@ -248,10 +251,8 @@ void Launcher::press_settings(Key key)
         case kAccessibility:
             open_modal(Modal::accessibility);
             break;
-        case kTheme:
-            open_modal(Modal::theme);
-            option_ = theme_index();
-            option_cursor_.snap(dialog_row_top(Modal::theme, option_));
+        case kAppearance:
+            open_modal(Modal::appearance);
             break;
         case kColour:
             open_modal(Modal::accent);
@@ -424,8 +425,8 @@ void Launcher::draw_settings(Canvas &c)
         case kLanguage:
             about = tr("The language games use when they offer it.");
             break;
-        case kTheme:
-            about = tr(t.summary);
+        case kAppearance:
+            about = tr("Choose a theme or change the launcher layout.");
             break;
         default:
             break;
@@ -446,13 +447,13 @@ void Launcher::draw_settings(Canvas &c)
     if (t.top_nav)
     {
         static constexpr Hint kHints[] = {
-            {Pad::cross, TR("Select")}, {Pad::circle, TR("Home")}, {Pad::l1, TR("Sections"), Pad::r1}};
-        draw_footer(c, kHints, 3);
+            {Pad::cross, TR("Select")}, {Pad::options, TR("Launcher")}, {Pad::circle, TR("Home")}, {Pad::l1, TR("Sections"), Pad::r1}};
+        draw_footer(c, kHints, 4);
         return;
     }
     static constexpr Hint kHints[] = {
-        {Pad::cross, TR("Select")}, {Pad::circle, TR("Back")}, {Pad::l1, TR("Sections"), Pad::r1}};
-    draw_footer(c, kHints, 3, home_.system_status);
+        {Pad::cross, TR("Select")}, {Pad::options, TR("Launcher")}, {Pad::circle, TR("Back")}, {Pad::l1, TR("Sections"), Pad::r1}};
+    draw_footer(c, kHints, 4, home_.system_status);
 }
 
 const char *Launcher::performance_about(int row)
@@ -490,6 +491,8 @@ int Launcher::dialog_rows(Modal modal) const
     case Modal::audio:
     case Modal::accessibility:
         return 3;
+    case Modal::appearance:
+        return 2;
     case Modal::theme:
         return static_cast<int>(themes().size());
     case Modal::accent:
@@ -517,6 +520,7 @@ float Launcher::dialog_row_top(Modal modal, int row) const
     {
     case Modal::audio:
     case Modal::accessibility:
+    case Modal::appearance:
     case Modal::theme:
         return 370.0f + 102.0f * static_cast<float>(row);
     case Modal::accent:
@@ -544,7 +548,16 @@ void Launcher::press_dialog(Key key)
     const int step = key == Key::left ? -1 : 1;
     if (key == Key::circle)
     {
-        close_modal();
+        if (modal_ == Modal::theme)
+        {
+            modal_ = modal_shown_ = Modal::appearance;
+            option_ = 0;
+            option_cursor_.snap(dialog_row_top(Modal::appearance, option_));
+            message_.clear();
+            cue(Cue::back);
+        }
+        else
+            close_modal();
         return;
     }
     if ((key == Key::up || key == Key::down) &&
@@ -570,6 +583,23 @@ void Launcher::press_dialog(Key key)
     }
     if (!adjust && !activate)
         return;
+    if (modal_ == Modal::appearance)
+    {
+        if (!activate)
+            return;
+        if (option_ == 0)
+        {
+            open_modal(Modal::theme);
+            option_ = theme_index();
+            option_cursor_.snap(dialog_row_top(Modal::theme, option_));
+        }
+        else
+        {
+            launcher_picker_ = true;
+            cue(Cue::open);
+        }
+        return;
+    }
     if (modal_ == Modal::theme)
     {
         // The look changes on the spot, and is kept for the next start.
@@ -806,6 +836,10 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
     case Modal::accessibility:
         title = tr("Accessibility");
         copy = tr("Make the menu easier to see and follow.");
+        break;
+    case Modal::appearance:
+        title = tr("Appearance");
+        copy = tr("Theme and launcher settings.");
         break;
     case Modal::theme:
         title = tr("Theme");
@@ -1062,6 +1096,22 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
                    2, kShrink);
         break;
     }
+    case Modal::appearance:
+    {
+        static constexpr const char *kNames[] = {TR("Theme"), TR("Launcher")};
+        for (int row = 0; row < rows; ++row)
+        {
+            const float shown = row == 0 ? text_shrink(c, th().name, 1292.0f,
+                                            baseline(dialog_row_top(modal, row), 94.0f, th().size_small),
+                                            th().size_small, th().meta, 320.0f, Align::right) : 0.0f;
+            label(row, tr(kNames[row]), shown);
+        }
+        const char* about = option_ == 0 ? tr("Choose the colours and appearance of this menu.") :
+                                         tr("Use another home screen, library and menu layout.");
+        text_block(c, about, 592.0f, baseline(700.0f, 30.0f, th().size_small), th().size_small,
+                   30.0f, th().meta, 736.0f, 2, kShrink);
+        break;
+    }
     case Modal::theme:
     {
         // Every theme this build has; the one in use carries the mark.
@@ -1162,6 +1212,18 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
         static constexpr Hint kOpen[] = {
             {Pad::updown, TR("Select")}, {Pad::cross, TR("Open")}, {Pad::circle, TR("Back")}};
         draw_menu_hints(c, kOpen, 3, 592.0f, foot, th().copy, 736.0f);
+    }
+    else if (modal == Modal::appearance)
+    {
+        static constexpr Hint kOpen[] = {
+            {Pad::updown, TR("Select")}, {Pad::cross, TR("Open")}, {Pad::circle, TR("Back")}};
+        draw_hints(c, kOpen, 3, 592.0f, foot, th().copy, 736.0f);
+    }
+    else if (modal == Modal::theme)
+    {
+        static constexpr Hint kApply[] = {
+            {Pad::updown, TR("Select")}, {Pad::cross, TR("Apply")}, {Pad::circle, TR("Back")}};
+        draw_hints(c, kApply, 3, 592.0f, foot, th().copy, 736.0f);
     }
     else if (rows > 1)
     {
