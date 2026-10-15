@@ -6,6 +6,8 @@
 #include <cstddef>
 #include <cstdint>
 #include <cstdio>
+#include <mutex>
+#include <vector>
 #include <optional>
 #include "common/cpu_features.h"
 
@@ -138,6 +140,38 @@ inline std::atomic<unsigned long long> cache_lock_contended{0}, cache_lock_block
 // for 110 ms of a 150 ms frame, in a large open-world game). So the GPU thread looks here
 // before it takes the locks for a draw (YieldToGuests), and lets the sleepers in first.
 inline std::atomic<int> cache_lock_sleepers{0};
+// Development: guest writes to GPU-tracked pages in detail (dev-settings cpu_write_detail=on,
+// EDEN_DEV_CPUWRITE). Per guest core (3 = any other thread): writes that took the tracked path
+// (core/memory.cpp HandleRasterizerWrite) and their time, those the core's last GPU-modified page
+// let through without OnCPUWrite, OnCPUWrite calls by write size (<=8, <=64, <=4096 bytes, more),
+// calls on the same page as the core's previous call and on the page after it, buffer pages marked
+// ahead (cpu_write_ahead), calls after which the page was still
+// tracked (its next write calls again), and inside OnCPUWrite: buffer cache lock wait and work by
+// outcome (no buffer there, GPU-modified, marked CPU-modified), texture cache lock wait and work,
+// and the shader cache invalidation.
+inline std::atomic<bool> cpu_write_detail{false};
+struct alignas(64) CpuWriteDetail {
+    std::atomic<unsigned long long> tracked{}, tracked_ns{}, passed{}, same_page{}, still_tracked{},
+        unregistered{}, gpu_modified{}, cpu_modified{}, buffer_wait_ns{}, buffer_ns{}, texture_wait_ns{},
+        texture_ns{}, shader_ns{}, next_page{}, ahead_pages{};
+    std::array<std::atomic<unsigned long long>, 4> sizes{};
+    unsigned long long last_page{~0ULL};  // the owning core's (core 3: under Eden's sys-core guard)
+};
+inline std::array<CpuWriteDetail, 4> cpu_write_stats{};
+// A guest write that leaves a buffer page tracked by the GPU caches costs a trip through
+// OnCPUWrite, mostly waiting for the buffer cache lock the GPU thread holds while it prepares each
+// draw (a game writing ~3,300 buffer pages per frame spent a third of two guest cores there). With
+// N > 0 the same trip also marks up to N following buffer pages CPU-modified, as their own first
+// write would, stopping at a page no buffer covers or one the GPU modified; texture and shader
+// pages stay tracked by their caches. A page marked ahead and never written is uploaded again
+// unchanged. That game wrote its buffers in order: 48.6 fps with 0, 58.7 with 16, 60 (its cap)
+// with 64, the trips falling from 159,000 to 4,500 a second. dev-settings cpu_write_ahead=N
+// (0-256) overrides it.
+inline std::atomic<unsigned> cpu_write_ahead{64};
+// The guest core of the write OnCPUWrite serves, set by HandleRasterizerWrite.
+inline thread_local unsigned cpu_write_core = 3;
+// The GPU thread's buffer and texture cache hold per draw preparation, with cpu_write_detail.
+inline Totals draw_cache_hold;
 // The GPU command interpreter (DmaPusher::ProcessCommands) calls out once per data word. An
 // incrementing write whose registers only store their value (no engine work until a later method
 // executes) is handed to the engine's pending-write list in one pass instead; registers that start
@@ -170,6 +204,79 @@ inline void YieldToGuests() {
     while (cache_lock_sleepers.load(std::memory_order_acquire) != 0 && now() < until)
         for (int pause = 0; pause < 16; ++pause) __builtin_ia32_pause();
 }
+// A guest write to a GPU-tracked page whose cache lock the GPU thread holds (it holds both for each
+// draw's preparation, up to 40% of the time in heavy scenes, longer when a scene change creates and
+// uploads resources) no longer waits: OnCPUWrite queues it here and returns as for an untracked
+// write. Before its next draw, clear, dispatch or engine copy (MemoryManager::FlushCaching) the GPU
+// thread runs each queued write through OnCPUWrite as the guest would have, and a write to
+// GPU-modified data goes to that core's dirty ranges for the next fence, as upstream: so the caches
+// see the write no later than had the guest waited, and GPU-written data keeps upstream's handling.
+// dev-settings cpu_write_defer=off waits as before.
+inline std::atomic<bool> cpu_write_defer{true};
+// One queue per guest core (3: other threads). Writes to the page of the queue's last entry, made
+// before the GPU thread takes the queue, widen that entry instead of trying the locks again, so a
+// burst of writes to a page costs one replay.
+struct DeferredWrite {
+    unsigned long long address, end;
+};
+struct DeferredQueue {
+    std::mutex mutex;
+    std::vector<DeferredWrite> writes;
+    unsigned taken = 0;  // Takes so far, under mutex.
+};
+inline std::array<DeferredQueue, 4> deferred_queues;
+inline thread_local unsigned long long deferred_page = ~0ULL;
+inline thread_local unsigned deferred_take = ~0U;
+// Set after a write is queued; the GPU thread clears it and runs the queues.
+inline std::atomic<bool> gpu_dirty_pending{false};
+inline std::atomic<unsigned long long> cpu_write_deferred{}, gpu_dirty_replays{};
+inline bool ExtendDeferredWrite(unsigned long long address, unsigned long long size, unsigned core) {
+    if ((address >> 12) != deferred_page) return false;
+    auto& queue = deferred_queues[core & 3];
+    std::scoped_lock lock{queue.mutex};
+    if (queue.taken != deferred_take || queue.writes.empty() || (queue.writes.back().address >> 12) != deferred_page)
+        return false;
+    auto& last = queue.writes.back();
+    last.address = std::min(last.address, address);
+    last.end = std::max(last.end, address + size);
+    return true;
+}
+inline void DeferWrite(unsigned long long address, unsigned long long size, unsigned core) {
+    auto& queue = deferred_queues[core & 3];
+    {
+        std::scoped_lock lock{queue.mutex};
+        queue.writes.push_back({address, address + size});
+        deferred_page = address >> 12;
+        deferred_take = queue.taken;
+    }
+    gpu_dirty_pending.store(true, std::memory_order_release);
+}
+inline std::vector<DeferredWrite> TakeDeferredWrites(unsigned core) {
+    std::vector<DeferredWrite> taken;
+    auto& queue = deferred_queues[core];
+    std::scoped_lock lock{queue.mutex};
+    taken.swap(queue.writes);
+    ++queue.taken;
+    return taken;
+}
+// A guest read of a GPU-tracked page whose texture cache lock is held answers "no download" without
+// waiting, as an empty area the read does not remember, so the next read checks again. A first read
+// of a newly GPU-written image can then miss its download: off by default (dev-settings cpu_read_skip=on).
+inline std::atomic<bool> cpu_read_skip{false};
+inline std::atomic<unsigned long long> cpu_read_skipped{};
+template <typename Mutex>
+inline bool GuestCacheLockOrDefer(Mutex& mutex) {
+    if (!cpu_write_defer.load(std::memory_order_relaxed)) {
+        GuestCacheLock(mutex);
+        return true;
+    }
+    if (mutex.try_lock()) return true;
+    cpu_write_deferred.fetch_add(1, std::memory_order_relaxed);
+    return false;
+}
+// Development, with cpu_write_detail: the longest draw-preparation hold since the last report, and
+// holds of 1 ms or more.
+inline std::atomic<unsigned long long> draw_cache_hold_max{}, draw_cache_hold_long{};
 // Guest waits: nvhost_ctrl syncpoint event registration -> signal, and
 // BufferQueueProducer::DequeueBuffer waiting for a free buffer slot.
 inline Totals guest_sync_wait, guest_dequeue_wait;
@@ -436,6 +543,15 @@ inline bool BootTrace() {
 inline void AddSince(Totals& totals, long long start) {
     totals.nanoseconds.fetch_add(static_cast<unsigned long long>(NowNs() - start), std::memory_order_relaxed);
     totals.calls.fetch_add(1, std::memory_order_relaxed);
+}
+inline void AddHold(long long start) {
+    const auto held = static_cast<unsigned long long>(NowNs() - start);
+    draw_cache_hold.nanoseconds.fetch_add(held, std::memory_order_relaxed);
+    draw_cache_hold.calls.fetch_add(1, std::memory_order_relaxed);
+    if (held >= 1000000) draw_cache_hold_long.fetch_add(1, std::memory_order_relaxed);
+    auto longest = draw_cache_hold_max.load(std::memory_order_relaxed);
+    while (held > longest && !draw_cache_hold_max.compare_exchange_weak(longest, held, std::memory_order_relaxed)) {
+    }
 }
 // A32/A64 memory accesses that left JIT code through the C++ callback (tracked,
 // unmapped or misaligned pages, exclusive stores). Written only by the owning core.

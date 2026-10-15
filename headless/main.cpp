@@ -776,9 +776,21 @@ int main(int argc, char** argv) {
                     Eden::Performance::SetSecondaryPlacement(false);
                 } else if (entry == "fastmem=off" || entry == "fastmem=on") {
                     Eden::Fastmem::Request(entry.ends_with("on"));
+                } else if (entry == "cpu_write_detail=on") {
+                    // EDEN_DEV_CPUWRITE: guest writes to GPU-tracked pages broken down per core.
+                    Eden::Performance::cpu_write_detail = true;
+                } else if (entry.starts_with("cpu_write_ahead=")) {
+                    // Buffer pages after a tracked write marked CPU-modified with it (performance.h).
+                    Eden::Performance::cpu_write_ahead = static_cast<unsigned>(std::min(256UL, std::strtoul(entry.c_str() + 16, nullptr, 10)));
                 } else if (entry.starts_with("cache_spin=")) {
                     // try_lock retries before a guest core sleeps on a GPU cache lock (0 = upstream).
                     Eden::Performance::cache_lock_spins = static_cast<unsigned>(std::strtoul(entry.c_str() + 11, nullptr, 10));
+                } else if (entry == "cpu_write_defer=off") {
+                    // Guest writes wait for a GPU cache lock the GPU thread holds, as upstream (performance.h).
+                    Eden::Performance::cpu_write_defer = false;
+                } else if (entry == "cpu_read_skip=on") {
+                    // Guest reads skip the download check while the GPU thread holds the texture cache lock.
+                    Eden::Performance::cpu_read_skip = true;
                 } else if (entry == "gc_dirty=upstream") {
                     // Eden's rule: evict GPU-written textures from the "expected" memory mark on.
                     Eden::Performance::gc_keep_dirty = false;

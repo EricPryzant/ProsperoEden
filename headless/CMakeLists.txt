@@ -886,7 +886,26 @@ if(EDEN_DEV_PROFILE)
         message(FATAL_ERROR "Pinned nvhost_ctrl event wait changed")
     endif()
     string(REPLACE "${ctrl_old}" "    const auto wait_start = ::Eden::Performance::NowNs();\n    event.wait_handle =\n        host1x_syncpoint_manager.RegisterHostAction(fence_id, target_value, [this, slot, wait_start]() {\n            ::Eden::Performance::AddSince(::Eden::Performance::guest_sync_wait, wait_start);\n            auto& event_ = events[slot];" ctrl_source "${ctrl_source}")
-    write_derived("${PORT_BUILD_DIR}/nvhost_ctrl.cpp" "#include \"${EDEN_PORT_DIR}/performance.h\"\n${ctrl_source}")
+    # Development: Eden stalls the guest when a syncpoint event wait failed three times; log the
+    # stall and its length (a stall that never ends leaves only the begin line).
+    set(stall_old [=[                auto lk = system.StallApplication();
+                host1x_syncpoint_manager.WaitHost(fence_id, target_value);
+                system.UnstallApplication();
+]=])
+    string(FIND "${ctrl_source}" "${stall_old}" stall_at)
+    if(stall_at LESS 0)
+        message(FATAL_ERROR "Pinned nvhost_ctrl stall changed")
+    endif()
+    string(REPLACE "${stall_old}" [=[                const long long stall_start = ::Eden::Performance::NowNs();
+                std::fprintf(stderr, "EDEN_GPU_STALL begin fence=%u target=%u fails=%u mono_ns=%lld\n",
+                             unsigned(fence_id), unsigned(target_value), unsigned(events[slot].fails), stall_start);
+                auto lk = system.StallApplication();
+                host1x_syncpoint_manager.WaitHost(fence_id, target_value);
+                system.UnstallApplication();
+                std::fprintf(stderr, "EDEN_GPU_STALL end fence=%u ms=%lld\n", unsigned(fence_id),
+                             (::Eden::Performance::NowNs() - stall_start) / 1000000);
+]=] ctrl_source "${ctrl_source}")
+    write_derived("${PORT_BUILD_DIR}/nvhost_ctrl.cpp" "#include <cstdio>\n#include \"${EDEN_PORT_DIR}/performance.h\"\n${ctrl_source}")
     list(REMOVE_ITEM core_sources "hle/service/nvdrv/devices/nvhost_ctrl.cpp")
     list(APPEND core_sources "${PORT_BUILD_DIR}/nvhost_ctrl.cpp")
     set(producer_old "        Status status = WaitForFreeSlotThenRelock(async, &found, &return_flags, lock);")
@@ -989,9 +1008,61 @@ if(EDEN_DEV_PROFILE)
     list(REMOVE_ITEM core_sources "hle/kernel/svc/svc_ipc.cpp")
     list(APPEND core_sources "${PORT_BUILD_DIR}/svc_ipc.cpp")
 endif()
+file(READ "${PROJECT_SOURCE_DIR}/src/core/memory.cpp" arena_source)
+# Development: guest writes to GPU-tracked pages in detail (performance.h CpuWriteDetail).
+set(tracked_old [=[        gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
+            auto& current_area = rasterizer_write_areas[core];
+            PAddr subaddress = address >> YUZU_PAGEBITS;
+]=])
+set(tracked_new [=[        const bool detail = ::Eden::Performance::cpu_write_detail.load(std::memory_order_relaxed);
+        auto& stats = ::Eden::Performance::cpu_write_stats[core];
+        const long long detail_start = detail ? ::Eden::Performance::NowNs() : 0;
+        SCOPE_EXIT {
+            if (detail) {
+                stats.tracked.fetch_add(1, std::memory_order_relaxed);
+                stats.tracked_ns.fetch_add(::Eden::Performance::NowNs() - detail_start, std::memory_order_relaxed);
+            }
+        };
+        ::Eden::Performance::cpu_write_core = static_cast<unsigned>(core);
+        gpu_device_memory->ApplyOpOnPointer(p, scratch_buffers[core], [&](DAddr address) {
+            auto& current_area = rasterizer_write_areas[core];
+            PAddr subaddress = address >> YUZU_PAGEBITS;
+            if (detail && current_area.last_address == subaddress)
+                stats.passed.fetch_add(1, std::memory_order_relaxed);
+            if (detail && current_area.last_address != subaddress) {
+                stats.sizes[size <= 8 ? 0 : size <= 64 ? 1 : size <= 4096 ? 2 : 3].fetch_add(1, std::memory_order_relaxed);
+                if (stats.last_page == subaddress)
+                    stats.same_page.fetch_add(1, std::memory_order_relaxed);
+                else if (stats.last_page + 1 == subaddress)
+                    stats.next_page.fetch_add(1, std::memory_order_relaxed);
+                stats.last_page = subaddress;
+            }
+]=])
+set(collect_old [=[                if (do_collection) {
+                    current_area.last_address = subaddress;
+                } else {
+                    return;
+                }
+]=])
+set(collect_new [=[                if (do_collection) {
+                    current_area.last_address = subaddress;
+                } else {
+                    if (detail && current_page_table->entries.GetUnchecked(v_address >> YUZU_PAGEBITS).Type() ==
+                                      Common::PageType::RasterizerCachedMemory)
+                        stats.still_tracked.fetch_add(1, std::memory_order_relaxed);
+                    return;
+                }
+]=])
+foreach(pair IN ITEMS tracked collect)
+    string(FIND "${arena_source}" "${${pair}_old}" pair_at)
+    if(pair_at LESS 0)
+        message(FATAL_ERROR "Pinned HandleRasterizerWrite changed (${pair})")
+    endif()
+    string(REPLACE "${${pair}_old}" "${${pair}_new}" arena_source "${arena_source}")
+endforeach()
+string(PREPEND arena_source "#include \"${EDEN_PORT_DIR}/performance.h\"\n")
 if(EDEN_A32_FASTMEM)
     # The window spans 4 GiB: only 32-bit applications get it as their fastmem arena.
-    file(READ "${PROJECT_SOURCE_DIR}/src/core/memory.cpp" arena_source)
     set(arena_old "        if (process.IsApplication() && Settings::IsFastmemEnabled()) {")
     string(FIND "${arena_source}" "${arena_old}" arena_at)
     if(arena_at LESS 0)
@@ -999,10 +1070,10 @@ if(EDEN_A32_FASTMEM)
     endif()
     string(REPLACE "${arena_old}" "        if (process.IsApplication() && !process.Is64Bit() && Settings::IsFastmemEnabled()) {"
         arena_source "${arena_source}")
-    write_derived("${PORT_BUILD_DIR}/memory.cpp" "${arena_source}")
-    list(REMOVE_ITEM core_sources "memory.cpp")
-    list(APPEND core_sources "${PORT_BUILD_DIR}/memory.cpp")
 endif()
+write_derived("${PORT_BUILD_DIR}/memory.cpp" "${arena_source}")
+list(REMOVE_ITEM core_sources "memory.cpp")
+list(APPEND core_sources "${PORT_BUILD_DIR}/memory.cpp")
 # Where a game's code is loaded: at a random offset, or at the one the game's seed gives
 # (load_address.h). Upstream takes the seed from its RNG seed setting, which also seeds the
 # random numbers a game is given; the port's seed fixes the offset alone.
@@ -2208,6 +2279,18 @@ if(EDEN_PS5_OPENGL)
             "        while (!synced && !system.IsShuttingDown())\n            sync_cv.wait_for(lk, std::chrono::milliseconds(10));\n        if (system.IsShuttingDown()) return false;" command_source "${command_source}")
         string(REPLACE "    while (word != value) {" "    while (word != value && !dma_pusher.system.IsShuttingDown()) {" command_source "${command_source}")
         if(unit STREQUAL "dma_pusher")
+            # Guest writes queued while a cache lock was held (performance.h cpu_write_defer) reach the
+            # caches before the GPU thread runs work submitted after them (FlushCaching runs the queue).
+            set(dispatch_old "void DmaPusher::DispatchCalls() {\n")
+            string(FIND "${command_source}" "${dispatch_old}" dispatch_at)
+            if(dispatch_at LESS 0)
+                message(FATAL_ERROR "Pinned DmaPusher::DispatchCalls changed")
+            endif()
+            string(REPLACE "${dispatch_old}" [=[void DmaPusher::DispatchCalls() {
+    if (::Eden::Performance::gpu_dirty_pending.load(std::memory_order_relaxed)) {
+        memory_manager.FlushCaching();
+    }
+]=] command_source "${command_source}")
             # Incrementing runs of store-only registers go to the engine's method sink in one pass
             # (performance.h dma_batch); the first word that starts engine work, the puller's
             # methods, increase-once writes and engines missing from the subchannel stay per word.
@@ -2283,6 +2366,40 @@ ${dma_count_word}
 endif()
 write_derived("${PORT_BUILD_DIR}/gpu.cpp" "${gpu_source}")
 list(APPEND video_sources "${PORT_BUILD_DIR}/gpu.cpp")
+# Guest writes queued while a cache lock was held (performance.h cpu_write_defer) run before the next
+# draw, clear, dispatch or engine copy: the GPU thread calls FlushCaching first in each, so the caches
+# see them no later than had the guest waited for the lock.
+file(READ "${PROJECT_SOURCE_DIR}/src/video_core/memory_manager.cpp" gpu_memory_source)
+set(flush_caching_old "void MemoryManager::FlushCaching() {\n")
+string(FIND "${gpu_memory_source}" "${flush_caching_old}" flush_caching_at)
+if(flush_caching_at LESS 0)
+    message(FATAL_ERROR "Pinned MemoryManager::FlushCaching changed")
+endif()
+string(REPLACE "#include \"memory_manager.h\"\n" "" gpu_memory_source "${gpu_memory_source}")
+string(REPLACE "${flush_caching_old}" [=[void MemoryManager::FlushCaching() {
+    if (::Eden::Performance::gpu_dirty_pending.load(std::memory_order_relaxed) &&
+        ::Eden::Performance::gpu_dirty_pending.exchange(false, std::memory_order_acq_rel)) {
+        ::Eden::Performance::gpu_dirty_replays.fetch_add(1, std::memory_order_relaxed);
+        for (unsigned core = 0; core < 4; ++core) {
+            for (const auto& write : ::Eden::Performance::TakeDeferredWrites(core)) {
+                if (rasterizer->OnCPUWrite(write.address, write.end - write.address)) {
+                    // Collect represents 32 x 64-byte blocks, not an entire device page.
+                    constexpr u64 region_size = 1ULL << (Core::DEVICE_PAGEBITS - 1);
+                    for (u64 address = write.address; address < write.end;) {
+                        const u64 size = std::min<u64>(write.end - address,
+                                                  region_size - (address & (region_size - 1)));
+                        system.GetGPUDirtyMemoryManager()[core].Collect(address, size);
+                        address += size;
+                    }
+                }
+            }
+        }
+    }
+]=] gpu_memory_source "${gpu_memory_source}")
+write_derived("${PORT_BUILD_DIR}/memory_manager.cpp"
+    "#include <atomic>\n#include \"${EDEN_PORT_DIR}/performance.h\"\n#include \"core/core.h\"\n#include \"core/gpu_dirty_memory_manager.h\"\n${gpu_memory_source}")
+list(REMOVE_ITEM video_sources memory_manager.cpp)
+list(APPEND video_sources "${PORT_BUILD_DIR}/memory_manager.cpp")
 if(EDEN_DEV_PROFILE)
     # Render-enable evaluations per mode and result (EDEN_DEV_GUEST cond=), to tell GPU
     # render conditions apart from the game's own LOD choices (LOD swaps).

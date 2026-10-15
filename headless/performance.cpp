@@ -868,6 +868,9 @@ void ReportGpuThread(unsigned frame) {
                 load(guest_sync_wait, true), load(guest_sync_wait, false),
                 load(guest_dequeue_wait, true), load(guest_dequeue_wait, false));
     std::printf(" ipc_calls=%llu ipc_ns=%llu", load(guest_ipc_wait, true), load(guest_ipc_wait, false));
+    std::printf(" write_deferred=%llu dirty_replays=%llu read_skipped=%llu",
+                cpu_write_deferred.load(std::memory_order_relaxed), gpu_dirty_replays.load(std::memory_order_relaxed),
+                cpu_read_skipped.load(std::memory_order_relaxed));
     std::printf(" tex_partial=%llu tex_partial_bytes=%llu tex_partial_checks=%llu tex_partial_mismatches=%llu",
                 tex_partial_uploads.load(std::memory_order_relaxed), tex_partial_bytes.load(std::memory_order_relaxed),
                 tex_partial_checks.load(std::memory_order_relaxed),
@@ -944,6 +947,28 @@ void ReportGpuThread(unsigned frame) {
                 ipc_hist[0].load(std::memory_order_relaxed), ipc_hist[1].load(std::memory_order_relaxed),
                 ipc_hist[2].load(std::memory_order_relaxed), ipc_hist[3].load(std::memory_order_relaxed),
                 load(ipc_thread_overflow, true), load(ipc_thread_overflow, false));
+    if (cpu_write_detail.load(std::memory_order_relaxed)) {
+        // Cumulative per guest core (3 = other threads); performance.h CpuWriteDetail.
+        std::printf("EDEN_DEV_CPUWRITE hold_calls=%llu hold_ns=%llu hold_max_ns=%llu hold_long=%llu",
+                    load(draw_cache_hold, true), load(draw_cache_hold, false),
+                    draw_cache_hold_max.exchange(0, std::memory_order_relaxed),
+                    draw_cache_hold_long.load(std::memory_order_relaxed));
+        for (unsigned core = 0; core < cpu_write_stats.size(); ++core) {
+            const auto& stats = cpu_write_stats[core];
+            const auto get = [](const std::atomic<unsigned long long>& value) {
+                return value.load(std::memory_order_relaxed);
+            };
+            std::printf(" c%u=%llu/%llu/%llu/%llu/%llu sizes%u=%llu/%llu/%llu/%llu out%u=%llu/%llu/%llu"
+                        " ns%u=%llu/%llu/%llu/%llu/%llu ahead%u=%llu/%llu",
+                        core, get(stats.tracked), get(stats.tracked_ns), get(stats.passed), get(stats.same_page),
+                        get(stats.still_tracked), core, get(stats.sizes[0]), get(stats.sizes[1]),
+                        get(stats.sizes[2]), get(stats.sizes[3]), core, get(stats.unregistered),
+                        get(stats.gpu_modified), get(stats.cpu_modified), core, get(stats.buffer_wait_ns),
+                        get(stats.buffer_ns), get(stats.texture_wait_ns), get(stats.texture_ns),
+                        get(stats.shader_ns), core, get(stats.next_page), get(stats.ahead_pages));
+        }
+        std::printf("\n");
+    }
     const auto window = Eden::Fastmem::WindowStats();
     std::printf("EDEN_FASTMEM window=%llx pages=%llu chunks=%llu direct_reads=%llu direct_writes=%llu "
                 "faults=%llu maps=%llu unmaps=%llu protects=%llu kernel_calls=%llu kernel_ns=%llu failures=%llu\n",

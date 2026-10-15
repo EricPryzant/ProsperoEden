@@ -170,6 +170,94 @@ void RasterizerVulkan::DispatchCompute() {"""),
     ::Eden::Performance::Mark(::Eden::Performance::draw_state, phase);
     draw_func();
     ::Eden::Performance::Mark(::Eden::Performance::draw_record, phase);'''),
+    # Development: where OnCPUWrite spends its time (performance.h CpuWriteDetail).
+    ("""    DEBUG_ASSERT(addr != 0 || size != 0);
+    {
+        ::Eden::Performance::GuestCacheLock(buffer_cache.mutex);
+        std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+        if (buffer_cache.OnCPUWrite(addr, size)) {
+            return true;
+        }
+    }
+    {
+        ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        texture_cache.WriteMemory(addr, size);
+    }
+    pipeline_cache.InvalidateRegion(addr, size);
+    return false;
+""",
+     """    DEBUG_ASSERT(addr != 0 || size != 0);
+    // A write to the page this core's last queued write covers joins it (performance.h DeferWrite).
+    if (::Eden::Performance::cpu_write_defer.load(std::memory_order_relaxed) &&
+        ::Eden::Performance::ExtendDeferredWrite(addr, size, ::Eden::Performance::cpu_write_core)) {
+        return false;
+    }
+    // Under the buffer cache lock: mark the buffer pages after this write CPU-modified as their own
+    // first writes would (performance.h cpu_write_ahead), up to a page no buffer covers or one the
+    // GPU modified.
+    const auto write_ahead = [this](DAddr written, u64 written_size) {
+        const unsigned pages = ::Eden::Performance::cpu_write_ahead.load(std::memory_order_relaxed);
+        unsigned marked = 0;
+        DAddr page = Common::AlignDown(written + written_size - 1, Core::DEVICE_PAGESIZE) + Core::DEVICE_PAGESIZE;
+        for (; marked < pages; ++marked, page += Core::DEVICE_PAGESIZE)
+            if (!buffer_cache.IsRegionRegistered(page, Core::DEVICE_PAGESIZE) ||
+                buffer_cache.OnCPUWrite(page, Core::DEVICE_PAGESIZE))
+                break;
+        return marked;
+    };
+    if (::Eden::Performance::cpu_write_detail.load(std::memory_order_relaxed)) [[unlikely]] {
+        using Detail = ::Eden::Performance::CpuWriteDetail;
+        Detail& stats = ::Eden::Performance::cpu_write_stats[::Eden::Performance::cpu_write_core & 3];
+        long long mark = ::Eden::Performance::NowNs();
+        const auto lap = [&](std::atomic<unsigned long long> Detail::*total) {
+            const long long now = ::Eden::Performance::NowNs();
+            (stats.*total).fetch_add(static_cast<unsigned long long>(now - mark), std::memory_order_relaxed);
+            mark = now;
+        };
+        {
+            ::Eden::Performance::GuestCacheLock(buffer_cache.mutex);
+            std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+            lap(&Detail::buffer_wait_ns);
+            const bool registered = buffer_cache.IsRegionRegistered(addr, size);
+            const bool gpu_modified = buffer_cache.OnCPUWrite(addr, size);
+            lap(&Detail::buffer_ns);
+            (!registered ? stats.unregistered : gpu_modified ? stats.gpu_modified : stats.cpu_modified)
+                .fetch_add(1, std::memory_order_relaxed);
+            if (gpu_modified) {
+                return true;
+            }
+            if (registered)
+                stats.ahead_pages.fetch_add(write_ahead(addr, size), std::memory_order_relaxed);
+            lap(&Detail::buffer_ns);
+        }
+        {
+            ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+            std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+            lap(&Detail::texture_wait_ns);
+            texture_cache.WriteMemory(addr, size);
+            lap(&Detail::texture_ns);
+        }
+        pipeline_cache.InvalidateRegion(addr, size);
+        lap(&Detail::shader_ns);
+        return false;
+    }
+    {
+        ::Eden::Performance::GuestCacheLock(buffer_cache.mutex);
+        std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+        if (buffer_cache.OnCPUWrite(addr, size)) {
+            return true;
+        }
+        write_ahead(addr, size);
+    }
+    {
+        ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        texture_cache.WriteMemory(addr, size);
+    }
+    pipeline_cache.InvalidateRegion(addr, size);
+    return false;
+"""),
     # A forced release blocks the GPU thread until the fence thread has retired
     # every older fence. Time only that producer-side drain.
     ('    fence_manager.WaitPendingFences(force);',
@@ -225,6 +313,14 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {'''),
      '    scheduler.Finish();\n'
      '}'),
     ('    prepared_pipeline = pipeline;\n', '    prepared_pipeline = pipeline;\n    probe_pipeline = pipeline;\n'),
+    # Development: how long draw preparation holds the cache locks guest writes wait for.
+    ('    probe_pipeline = pipeline;\n',
+     '    probe_pipeline = pipeline;\n'
+     '    const long long hold_start = ::Eden::Performance::cpu_write_detail.load(std::memory_order_relaxed)\n'
+     '        ? ::Eden::Performance::NowNs() : 0;\n'
+     '    SCOPE_EXIT {\n'
+     '        if (hold_start != 0) ::Eden::Performance::AddSince(::Eden::Performance::draw_cache_hold, hold_start);\n'
+     '    };\n'),
     ('        }\n    });\n}\n\nvoid RasterizerVulkan::DrawIndirect() {',
      '        }\n    });\n    SyncProbe(scheduler, "draw", probe_pipeline);\n}\n\nvoid RasterizerVulkan::DrawIndirect() {'),
     ('void RasterizerVulkan::DrawTexture() {', 'void RasterizerVulkan::DrawTexture() {\n    SCOPE_EXIT { SyncProbe(scheduler, "draw_texture", nullptr); };'),
@@ -232,6 +328,83 @@ void RasterizerVulkan::PrepareDraw(bool is_indexed, Func&& draw_func) {'''),
     ('    ComputePipeline* const pipeline{pipeline_cache.CurrentComputePipeline()};\n    if (!pipeline) {\n        return;\n    }',
      '    ComputePipeline* const pipeline{pipeline_cache.CurrentComputePipeline()};\n    if (!pipeline) {\n        return;\n    }\n'
      '    SCOPE_EXIT { SyncProbe(scheduler, "dispatch", pipeline); };'),
+    # Guest writes while the GPU thread holds a cache lock are queued instead of waiting
+    # (performance.h cpu_write_defer); the GPU thread runs them before its next draw.
+    ('''    {
+        ::Eden::Performance::GuestCacheLock(buffer_cache.mutex);
+        std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+        if (buffer_cache.OnCPUWrite(addr, size)) {
+            return true;
+        }
+        write_ahead(addr, size);
+    }
+    {
+        ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        texture_cache.WriteMemory(addr, size);
+    }
+''',
+     '''    {
+        if (!::Eden::Performance::GuestCacheLockOrDefer(buffer_cache.mutex)) {
+            ::Eden::Performance::DeferWrite(addr, size, ::Eden::Performance::cpu_write_core);
+            return false;
+        }
+        std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+        if (buffer_cache.OnCPUWrite(addr, size)) {
+            return true;
+        }
+        write_ahead(addr, size);
+    }
+    {
+        if (!::Eden::Performance::GuestCacheLockOrDefer(texture_cache.mutex)) {
+            ::Eden::Performance::DeferWrite(addr, size, ::Eden::Performance::cpu_write_core);
+            return false;
+        }
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        texture_cache.WriteMemory(addr, size);
+    }
+'''),
+    ('''            ::Eden::Performance::GuestCacheLock(buffer_cache.mutex);
+            std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+            lap(&Detail::buffer_wait_ns);
+''',
+     '''            if (!::Eden::Performance::GuestCacheLockOrDefer(buffer_cache.mutex)) {
+                lap(&Detail::buffer_wait_ns);
+                ::Eden::Performance::DeferWrite(addr, size, ::Eden::Performance::cpu_write_core);
+                return false;
+            }
+            std::lock_guard lock{buffer_cache.mutex, std::adopt_lock};
+            lap(&Detail::buffer_wait_ns);
+'''),
+    ('''            ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+            std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+            lap(&Detail::texture_wait_ns);
+''',
+     '''            if (!::Eden::Performance::GuestCacheLockOrDefer(texture_cache.mutex)) {
+                lap(&Detail::texture_wait_ns);
+                ::Eden::Performance::DeferWrite(addr, size, ::Eden::Performance::cpu_write_core);
+                return false;
+            }
+            std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+            lap(&Detail::texture_wait_ns);
+'''),
+    # Guest reads may skip the download check while the texture cache lock is held (cpu_read_skip).
+    ('''        ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        auto area = texture_cache.GetFlushArea(addr, size);''',
+     '''        if (::Eden::Performance::cpu_read_skip.load(std::memory_order_relaxed)) {
+            if (!texture_cache.mutex.try_lock()) {
+                ::Eden::Performance::cpu_read_skipped.fetch_add(1, std::memory_order_relaxed);
+                // Empty: HandleRasterizerDownload does not remember it, so the next read checks again.
+                return VideoCore::RasterizerDownloadArea{.start_address = addr, .end_address = addr, .preemtive = true};
+            }
+        } else {
+            ::Eden::Performance::GuestCacheLock(texture_cache.mutex);
+        }
+        std::lock_guard lock{texture_cache.mutex, std::adopt_lock};
+        auto area = texture_cache.GetFlushArea(addr, size);'''),
+    ('        if (hold_start != 0) ::Eden::Performance::AddSince(::Eden::Performance::draw_cache_hold, hold_start);\n',
+     '        if (hold_start != 0) ::Eden::Performance::AddHold(hold_start);\n'),
     # Dynamic vertex input: a stream with instancing on and frequency 0 advances per vertex, as the
     # pipeline's static vertex input (binding_divisors) and OpenGL's divisor 0 take it. Here it was
     # an instance-rate binding with divisor 0, every vertex reading element 0: geometry collapsed
