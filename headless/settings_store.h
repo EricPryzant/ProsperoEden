@@ -39,6 +39,7 @@
 // text files of earlier versions (settings.txt, last-game.txt, recent-games.txt, assets-dir.txt,
 // game-<title>-mode.txt) are read once into the JSON file and left in place.
 #pragma once
+#include "hud.h"
 #include <algorithm>
 #include <array>
 #include <atomic>
@@ -156,8 +157,8 @@ struct Preferences {
     int hud_corner = 0;      // index into kHudCornerKeys: which corner of the picture it stands in
     bool hud_colors = true;  // the line in its inks rather than one (bake-loading-text.py)
     // What the overlay's line may say, bit by bit (hud.h's kHudField*): the pieces the user has
-    // chosen to show. All of them by default.
-    int hud_fields = 0xff;
+    // chosen to show. All of them by default, the game's own resolution (bit 9) with the rest.
+    int hud_fields = 0x2ff;
     // Which face button presses each core menu action (Settings > Controls > Menu keybinds).
     MenuBinding menu_bind = kDefaultMenuBinding;
 };
@@ -389,7 +390,7 @@ inline Preferences LoadPreferences(const std::string& file = SettingsFile()) {
                                        result.hud_colors);
     const int hud_fields =
         Settings::Int(document, Json::json_pointer("/video/fps_overlay_fields"), result.hud_fields);
-    if (hud_fields >= 0 && hud_fields <= 0x1ff) result.hud_fields = hud_fields;
+    if (ValidHudFields(hud_fields)) result.hud_fields = hud_fields;
     result.backend = Settings::String(document, Json::json_pointer("/video/renderer")) == "opengl" ?
         GraphicsBackend::OpenGL : GraphicsBackend::Vulkan;
     const int volume = Settings::Int(document, Json::json_pointer("/audio/volume"), result.volume);
@@ -455,7 +456,7 @@ inline bool SavePreferences(const Preferences& value, const std::string& file = 
         value.language < 0 || value.language >= int(std::size(kLanguageKeys)) ||
         value.hud_size < 0 || value.hud_size >= int(std::size(kHudSizeKeys)) ||
         value.hud_corner < 0 || value.hud_corner >= int(std::size(kHudCornerKeys)) ||
-        value.hud_fields < 0 || value.hud_fields > 0x1ff || !ValidMapping(value.mapping) ||
+        !ValidHudFields(value.hud_fields) || !ValidMapping(value.mapping) ||
         !ValidMenuBinding(value.menu_bind)) return false;
     Settings::Json document = Settings::Load(file);
     document["version"] = 1;
