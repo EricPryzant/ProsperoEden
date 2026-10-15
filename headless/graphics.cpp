@@ -482,7 +482,7 @@ private:
                 " color = vec4(mix(vec3(0.0196,0.0392,0.0039), vec3(0.7216,0.9490,0.0471), cover), 1.0);"
                 " return; }\n"
                 "vec4 panel = hud_panel(vec2(gl_FragCoord.x - box_at.x,"
-                " box_at.y + box.y - gl_FragCoord.y), box, colors);\n"
+                " box_at.y + box.y - gl_FragCoord.y), box);\n"
                 "vec3 ink = colors ? hud_ink(pick.ink) : kHudInk;\n"
                 "color = vec4(mix(panel.rgb, ink, cover), mix(panel.a, 1.0, cover));\n}\n";
             const char* sources[]{
