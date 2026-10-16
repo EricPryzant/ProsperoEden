@@ -136,6 +136,8 @@ std::array<bool, 8> Launcher::switch_states(Modal modal) const
         return {prefs_.vibration, false, false};
     case Modal::accessibility:
         return {prefs_.large_text, prefs_.high_contrast, prefs_.reduce_motion};
+    case Modal::wallpaper:
+        return {}; // no switches: the dialog only lists the folder's images
     default:
         return {prefs_.detailed_logging, prefs_.immediate_logs, false};
     }
@@ -309,6 +311,13 @@ void Launcher::update(float dt)
     screen_time_ += dt;
     message_age_ += dt;
     backdrop_.update(dt);
+    // The wallpaper (Settings > Appearance > Wallpaper): the same call with the same file does
+    // nothing, so the choice is only read when it changed.
+    {
+        const std::string folder = services_.wallpapers_folder();
+        textures_.load_wallpaper(
+            prefs_.wallpaper.empty() || folder.empty() ? std::string{} : folder + "/" + prefs_.wallpaper);
+    }
     if (th().game_backdrop)
     {
         if (screen_ == Screen::home && !home_.last_cover.empty())
@@ -374,6 +383,7 @@ void Launcher::update(float dt)
     performance_rows_.update(dt);
     controls_rows_.update(dt);
     accent_rows_.update(dt);
+    wallpaper_rows_.update(dt);
     game_rows_.update(dt);
     mod_rows_.update(dt);
     option_rows_.update(dt);

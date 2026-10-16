@@ -5,6 +5,7 @@
 #include "pe/ui/launcher.hpp"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <vector>
 
@@ -177,6 +178,40 @@ std::string pick(const std::vector<std::string> &values, int index)
 std::string short_path(const std::string &path, std::size_t limit)
 {
     return path.size() <= limit ? path : "..." + path.substr(path.size() - (limit - 3));
+}
+
+// The Wallpaper dialog's rows: "None" and the folder's images, which scroll with the folder's
+// name under them (docs/WALLPAPERS.md).
+constexpr int kWallpaperRowsShown = 4;
+constexpr Rect kWallpaperWindow{592.0f, kVideoRowsTop, 736.0f,
+                                kVideoRowPitch * (kWallpaperRowsShown - 1) + kVideoRowHeight};
+
+// A file the Wallpaper dialog lists: an image pe/gfx/image.cpp reads, with a name
+// settings_store.h's ValidWallpaperName would save.
+bool WallpaperImage(const std::string &name)
+{
+    const std::size_t dot = name.find_last_of('.');
+    if (dot == std::string::npos || dot == 0 || dot + 1 == name.size() || name.size() > 128)
+        return false;
+    for (unsigned char c : name)
+        if (c < 32 || c == 127 || c == '/' || c == '\\')
+            return false;
+    std::string extension = name.substr(dot);
+    for (char &c : extension)
+        c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+    return extension == ".png" || extension == ".jpg" || extension == ".jpeg" || extension == ".bmp" ||
+           extension == ".gif" || extension == ".tga" || extension == ".dds";
+}
+
+// The row what is in use sits on: "None" (0) or the folder's image (1+).
+int WallpaperRow(const std::string &chosen, const std::vector<std::string> &files)
+{
+    if (chosen.empty())
+        return 0;
+    for (std::size_t index = 0; index < files.size(); ++index)
+        if (files[index] == chosen)
+            return 1 + static_cast<int>(index);
+    return 0;
 }
 
 } // namespace
@@ -505,7 +540,9 @@ int Launcher::dialog_rows(Modal modal) const
     case Modal::accessibility:
         return 3;
     case Modal::appearance:
-        return 2;
+        return 3; // theme, launcher and wallpaper
+    case Modal::wallpaper:
+        return 1 + static_cast<int>(wallpaper_files_.size()); // "None" and the images
     case Modal::theme:
         return static_cast<int>(themes().size());
     case Modal::accent:
@@ -542,6 +579,8 @@ float Launcher::dialog_row_top(Modal modal, int row) const
         return kVideoRowsTop + kVideoRowPitch * static_cast<float>(row) - performance_rows_.scroll();
     case Modal::video: // five of its rows show; the list scrolls to the others
         return kVideoRowsTop + kVideoRowPitch * static_cast<float>(row) - video_rows_.scroll();
+    case Modal::wallpaper: // four of its rows show; the list scrolls to the others
+        return kVideoRowsTop + kVideoRowPitch * static_cast<float>(row) - wallpaper_rows_.scroll();
     case Modal::game:
         return 334.0f + 96.0f * static_cast<float>(row);
     case Modal::controls: // under the shortcuts; the list scrolls
@@ -561,10 +600,12 @@ void Launcher::press_dialog(Key key)
     const int step = key == Key::left ? -1 : 1;
     if (key == Key::circle)
     {
-        if (modal_ == Modal::theme)
+        if (modal_ == Modal::theme || modal_ == Modal::wallpaper)
         {
+            // Back to Appearance, on the row that opened these options.
+            const bool from_wallpaper = modal_ == Modal::wallpaper;
             modal_ = modal_shown_ = Modal::appearance;
-            option_ = 0;
+            option_ = from_wallpaper ? 2 : 0;
             option_cursor_.snap(dialog_row_top(Modal::appearance, option_));
             message_.clear();
             cue(Cue::back);
@@ -575,12 +616,13 @@ void Launcher::press_dialog(Key key)
     }
     if ((key == Key::up || key == Key::down) &&
         (modal_ == Modal::video || modal_ == Modal::performance || modal_ == Modal::controls ||
-         modal_ == Modal::accent))
+         modal_ == Modal::accent || modal_ == Modal::wallpaper))
     {
-        ListView &rows_view = modal_ == Modal::video      ? video_rows_
-                              : modal_ == Modal::controls ? controls_rows_
-                              : modal_ == Modal::accent  ? accent_rows_
-                                                          : performance_rows_;
+        ListView &rows_view = modal_ == Modal::video       ? video_rows_
+                              : modal_ == Modal::controls  ? controls_rows_
+                              : modal_ == Modal::accent    ? accent_rows_
+                              : modal_ == Modal::wallpaper ? wallpaper_rows_
+                                                           : performance_rows_;
         if (rows_view.move(key == Key::down ? 1 : -1))
         {
             option_ = rows_view.selected;
@@ -608,10 +650,28 @@ void Launcher::press_dialog(Key key)
             option_ = theme_index();
             option_cursor_.snap(dialog_row_top(Modal::theme, option_));
         }
-        else
+        else if (option_ == 1)
         {
             launcher_picker_ = true;
             cue(Cue::open);
+        }
+        else
+        {
+            // The wallpaper's own dialog (docs/WALLPAPERS.md): the folder's images, each on its
+            // own row, with "None" above them.
+            std::vector<std::string> files = services_.wallpapers();
+            std::vector<std::string> images;
+            for (std::string &name : files)
+                if (WallpaperImage(name))
+                    images.push_back(std::move(name));
+            wallpaper_files_ = std::move(images);
+            open_modal(Modal::wallpaper);
+            wallpaper_rows_.visible = kWallpaperRowsShown;
+            wallpaper_rows_.pitch = kVideoRowPitch;
+            const int row = WallpaperRow(prefs_.wallpaper, wallpaper_files_);
+            wallpaper_rows_.reset(dialog_rows(Modal::wallpaper), row);
+            option_ = row;
+            option_cursor_.snap(dialog_row_top(Modal::wallpaper, option_));
         }
         return;
     }
@@ -791,11 +851,24 @@ void Launcher::press_dialog(Key key)
         else
             prefs_.immediate_logs = !prefs_.immediate_logs;
         break;
+    case Modal::wallpaper:
+        if (!activate)
+            return;
+        {
+            // "None" (row 0) shows the theme's own art again; a row below is that image. The
+            // picture changing is the confirmation, as the theme's look changing is.
+            const int chosen =
+                option_ >= 1 && option_ - 1 < static_cast<int>(wallpaper_files_.size()) ? option_ - 1 : -1;
+            prefs_.wallpaper =
+                chosen < 0 ? std::string{} : wallpaper_files_[static_cast<std::size_t>(chosen)];
+            sound = Cue::saved;
+        }
+        break;
     default:
         return;
     }
     // The launcher's look changes on the spot: that is its own confirmation.
-    if (!save_preferences(modal_ == Modal::accessibility))
+    if (!save_preferences(modal_ == Modal::accessibility || modal_ == Modal::wallpaper))
     {
         prefs_ = before;
         sound = Cue::error;
@@ -857,6 +930,10 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
         title = tr("Appearance");
         copy = tr("Theme and launcher settings.");
         break;
+    case Modal::wallpaper:
+        title = tr("Wallpaper");
+        copy = tr("An image of your own behind this menu.");
+        break;
     case Modal::theme:
         title = tr("Theme");
         copy = tr("The look of this menu.");
@@ -878,17 +955,20 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
 
     const int rows = dialog_rows(modal);
     // Video's rows scroll in a window of five, Performance's in one of four, Controls' in one
-    // of three under its shortcuts and Colour's in one of six; the other dialogs show all of
-    // theirs.
+    // of three under its shortcuts, Colour's in one of six and Wallpaper's in one of four; the
+    // other dialogs show all of theirs.
     const bool scrolls = modal == Modal::video || modal == Modal::performance ||
-                         modal == Modal::controls || modal == Modal::accent;
+                         modal == Modal::controls || modal == Modal::accent ||
+                         modal == Modal::wallpaper;
     const ListView &rows_view = modal == Modal::performance    ? performance_rows_
                                 : modal == Modal::controls     ? controls_rows_
-                                : modal == Modal::accent      ? accent_rows_
+                                : modal == Modal::accent       ? accent_rows_
+                                : modal == Modal::wallpaper    ? wallpaper_rows_
                                                                : video_rows_;
     const Rect &window = modal == Modal::performance    ? kPerformanceWindow
                          : modal == Modal::controls     ? kControlsWindow
-                         : modal == Modal::accent      ? kAccentWindow
+                         : modal == Modal::accent       ? kAccentWindow
+                         : modal == Modal::wallpaper    ? kWallpaperWindow
                                                         : kVideoWindow;
     const float rows_top = modal == Modal::controls ? kControlsRowsTop : kVideoRowsTop;
     const int first = scrolls ? rows_view.first_row() : 0;
@@ -1118,18 +1198,54 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
     }
     case Modal::appearance:
     {
-        static constexpr const char *kNames[] = {TR("Theme"), TR("Launcher")};
+        static constexpr const char *kNames[] = {TR("Theme"), TR("Launcher"), TR("Wallpaper")};
+        const std::string wallpaper_name =
+            prefs_.wallpaper.empty() ? std::string{tr("None")} : prefs_.wallpaper;
         for (int row = 0; row < rows; ++row)
         {
-            const float shown = row == 0 ? text_shrink(c, th().name, 1292.0f,
-                                            baseline(dialog_row_top(modal, row), 94.0f, th().size_small),
-                                            th().size_small, th().meta, 320.0f, Align::right) : 0.0f;
+            const float shown =
+                row == 0 ? text_shrink(c, th().name, 1292.0f,
+                                       baseline(dialog_row_top(modal, row), 94.0f, th().size_small),
+                                       th().size_small, th().meta, 320.0f, Align::right) :
+                row == 2 ? text_shrink(c, wallpaper_name, 1292.0f,
+                                       baseline(dialog_row_top(modal, row), 94.0f, th().size_small),
+                                       th().size_small, th().meta, 320.0f, Align::right) :
+                           0.0f;
             label(row, tr(kNames[row]), shown);
         }
-        const char* about = option_ == 0 ? tr("Choose the colours and appearance of this menu.") :
-                                         tr("Use another home screen, library and menu layout.");
+        const char *about = option_ == 0    ? tr("Choose the colours and appearance of this menu.") :
+                            option_ == 1    ? tr("Use another home screen, library and menu layout.") :
+                                              tr("Show an image of your own behind the menu.");
         text_block(c, about, 592.0f, baseline(700.0f, 30.0f, th().size_small), th().size_small,
                    30.0f, th().meta, 736.0f, 2, kShrink);
+        break;
+    }
+    case Modal::wallpaper:
+    {
+        // "None" and every image the folder holds: what is in use carries the mark (as the
+        // theme and colour dialogs mark theirs).
+        const int current = WallpaperRow(prefs_.wallpaper, wallpaper_files_);
+        const auto row_name = [&](int row) -> const char *
+        {
+            if (row == 0)
+                return tr("None");
+            const std::size_t index = static_cast<std::size_t>(row - 1);
+            return index < wallpaper_files_.size() ? wallpaper_files_[index].c_str() : "";
+        };
+        for (int row = first; row <= last; ++row)
+        {
+            list.push_opacity(rows_view.row_alpha(row, kVideoRowHeight));
+            label(row, row_name(row), 64.0f);
+            if (row == current)
+            {
+                list.circle(1268.0f, row_centre(row), 17.0f, th().accent);
+                const bool contrast = look().high_contrast;
+                look().high_contrast = false;
+                icon(c, Icon::check, 1268.0f, row_centre(row), 22.0f, th().on_accent);
+                look().high_contrast = contrast;
+            }
+            list.pop_opacity();
+        }
         break;
     }
     case Modal::theme:
@@ -1210,6 +1326,16 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
                    baseline(window.y + window.h + 22.0f, 30.0f, th().size_small), th().size_small, 30.0f,
                    th().meta, 736.0f, 2, kShrink);
     }
+    if (modal == Modal::wallpaper)
+    {
+        // The folder the images are put in (as Performance says what its switches do).
+        const std::string folder = services_.wallpapers_folder();
+        text_block(c, folder.empty() ?
+                          std::string{tr("Put images in the wallpapers folder to show them here.")} :
+                          fill(tr("Images in this folder: {0}"), {short_path(folder, 64)}),
+                   592.0f, baseline(window.y + window.h + 22.0f, 30.0f, th().size_small), th().size_small,
+                   30.0f, th().meta, 736.0f, 2, kShrink);
+    }
 
     // Under the rows: Video's five, Performance's four with their line of text, and Controls'
     // that scroll under its shortcuts all end lower than the other dialogs' rows.
@@ -1244,7 +1370,7 @@ void Launcher::draw_dialog(Canvas &c, Modal modal, float open)
             {Pad::updown, TR("Select")}, {Pad::cross, TR("Open")}, {Pad::circle, TR("Back")}};
         draw_hints(c, kOpen, 3, 592.0f, foot, th().copy, 736.0f);
     }
-    else if (modal == Modal::theme)
+    else if (modal == Modal::theme || modal == Modal::wallpaper)
     {
         static constexpr Hint kApply[] = {
             {Pad::updown, TR("Select")}, {Pad::cross, TR("Apply")}, {Pad::circle, TR("Back")}};

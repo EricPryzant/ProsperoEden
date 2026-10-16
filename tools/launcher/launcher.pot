@@ -96,6 +96,10 @@ msgstr ""
 msgid "AMD FSR"
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "An image of your own behind this menu."
+msgstr ""
+
 #: eden_services.cpp
 msgid "Another language"
 msgstr ""
@@ -817,6 +821,10 @@ msgstr ""
 msgid "How games are drawn and scaled to your TV."
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "Images in this folder: {0}"
+msgstr ""
+
 #. Button hint: copy a save in.
 #: pe/ui/library.cpp
 msgid "Import"
@@ -1144,7 +1152,7 @@ msgid "Nobody approved the code in time."
 msgstr ""
 
 #. No add-ons (updates or DLC).
-#: pe/ui/library.cpp
+#: pe/ui/library.cpp, pe/ui/settings.cpp
 msgid "None"
 msgstr ""
 
@@ -1428,6 +1436,10 @@ msgstr ""
 msgid "PUBLIC ROOMS"
 msgstr ""
 
+#: pe/ui/settings.cpp
+msgid "Put images in the wallpapers folder to show them here."
+msgstr ""
+
 #: pe/ui/remote.cpp
 msgid "Queued"
 msgstr ""
@@ -1690,6 +1702,10 @@ msgstr ""
 
 #: pe/ui/remote.cpp
 msgid "Several sources have this game. Which one should it come from?"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Show an image of your own behind the menu."
 msgstr ""
 
 #: pe/ui/settings.cpp
@@ -2108,6 +2124,10 @@ msgstr ""
 
 #: pe/ui/remote.cpp
 msgid "Waiting to download"
+msgstr ""
+
+#: pe/ui/settings.cpp
+msgid "Wallpaper"
 msgstr ""
 
 #: pe/ui/settings.cpp
