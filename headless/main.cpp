@@ -291,7 +291,7 @@ int main(int argc, char** argv) {
         SCOPE_EXIT { if (report != stdout) std::fclose(report); };
         std::setvbuf(report, nullptr, _IONBF, 0);
 #ifdef PS5_NATIVE
-        Eden::BootTrace::Begin(Eden::kAppVersion, __DATE__ " " __TIME__);
+        Eden::BootTrace::Begin(Eden::LabelledVersion().c_str(), __DATE__ " " __TIME__);
         // The PS5 keyboard's module, for a game's text entry: asked for before anything else
         // changes what the app may load (system_keyboard.h).
         Eden::BootTrace::Line("PS5 keyboard module: %#x", static_cast<unsigned>(Eden::PrepareSystemKeyboard()));
@@ -351,7 +351,9 @@ int main(int argc, char** argv) {
         // unless Settings > Diagnostics asks for every line at once (to find a crash).
         static Eden::LogFlusher log_flusher;
         if (!log_flusher.Start(Eden::LoadPreferences().immediate_logs)) return 2;
-        Eden::Crash::Install(Eden::LogsDir(), Eden::kAppVersion, last_crash.restarted);
+        Eden::Crash::Install(Eden::LogsDir(), Eden::LabelledVersion().c_str(), last_crash.restarted);
+        std::fprintf(stderr, "EDEN_BUILD version=%s label=%s\n", Eden::kAppVersion,
+                     Eden::kBuildLabel[0] ? Eden::kBuildLabel : "release");
         Eden::BootTrace::Ready(Eden::LogsDir(), Eden::FilesystemAccess());
         Eden::BootTrace::Line("logs and crash handler ready (%s)", Eden::LogsDir().c_str());
         for (const char* folder : {"/app0", Eden::kMountedAppDir, Eden::kInstallDir, "/mnt/sandbox/PPSA99008_000/app0"})

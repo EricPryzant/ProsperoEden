@@ -30,6 +30,7 @@ public:
     unsigned controllers() override;
     void vibration_pulse(int percent) override;
     std::string version() override;
+    std::string build_label() override;
 
     std::vector<pe::ui::Game> games() override;
     std::string game_path(const std::string& file) override;

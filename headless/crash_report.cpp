@@ -75,7 +75,7 @@ bool restarted_process = false;
 std::time_t started_at = 0;
 long utc_offset = 0;
 char logs[200];
-char version[40];
+char version[96]; // with a build's label (prosperoeden/version.h): up to 67 characters
 char sessions[2][400];
 std::atomic<unsigned> session_now{0};
 std::atomic<bool> reported{false};  // the report is written: the helper threads act

@@ -488,12 +488,14 @@ void Launcher::draw_about(Canvas &c)
         info_line(832.0f, tr("MODS"), folder + "/mods");
         text_shrink(c, tr("Menu sound effects made with ElevenLabs."), x,
                     baseline(880.0f, 26.0f, t.size_small), t.size_small, t.meta, w);
-        text(c, version_, kPanelLeft + kPanelWidth - 32.0f, baseline(920.0f, 26.0f, t.size_small),
-             t.size_small, t.accent_pale, Align::right);
-        // A newer release the check found (with Update notices off, the one place that says so).
+        const float version_width = text(c, version_, kPanelLeft + kPanelWidth - 32.0f,
+                                         baseline(920.0f, 26.0f, t.size_small), t.size_small, t.accent_pale, Align::right);
+        // A newer release the check found (with Update notices off, the one place that says so),
+        // left of the version (longer with a build's label).
         if (!update_version_.empty())
             text_shrink(c, fill(tr("Version {0} is on homebrew.page"), {update_version_}), x,
-                        baseline(920.0f, 26.0f, t.size_small), t.size_small, t.meta, w - 200.0f);
+                        baseline(920.0f, 26.0f, t.size_small), t.size_small, t.meta,
+                        std::min(w - 200.0f, w - version_width - 40.0f));
         static constexpr Hint kHints[] = {{Pad::circle, TR("Home")}, {Pad::l1, TR("Sections"), Pad::r1}};
         draw_footer(c, kHints, 2);
         return;
@@ -527,12 +529,14 @@ void Launcher::draw_about(Canvas &c)
                748.0f, 2, kShrink);
     text_shrink(c, tr("Menu sound effects made with ElevenLabs."), 144.0f,
                 baseline(788.0f, 30.0f, th().size_small), th().size_small, th().meta, 748.0f);
-    text(c, version_, 892.0f, baseline(866.0f, 28.0f, th().size_small), th().size_small,
-         th().accent_pale, Align::right);
-    // A newer release the check found (with Update notices off, the one place that says so).
+    const float version_width = text(c, version_, 892.0f, baseline(866.0f, 28.0f, th().size_small),
+                                     th().size_small, th().accent_pale, Align::right);
+    // A newer release the check found (with Update notices off, the one place that says so), left
+    // of the version (longer with a build's label).
     if (!update_version_.empty())
         text_shrink(c, fill(tr("Version {0} is on homebrew.page"), {update_version_}), 144.0f,
-                    baseline(866.0f, 28.0f, th().size_small), th().size_small, th().meta, 540.0f);
+                    baseline(866.0f, 28.0f, th().size_small), th().size_small, th().meta,
+                    std::min(540.0f, 892.0f - version_width - 24.0f - 144.0f));
 
     glass(c, kDetailPanel, th().radius_panel, th().panel.with_alpha(0.80f),
           th().panel_edge.with_alpha(0.55f));

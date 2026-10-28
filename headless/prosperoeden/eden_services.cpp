@@ -718,6 +718,8 @@ std::string EdenServices::version() {
     return std::string("v") + text;
 }
 
+std::string EdenServices::build_label() { return Eden::kBuildLabel; }
+
 std::vector<pe::ui::Game> EdenServices::games() {
     // The launcher reads the list beside its menu (pe/ui/library.cpp), so the metadata reader
     // is used by one thread at a time.

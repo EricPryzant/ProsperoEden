@@ -3120,8 +3120,13 @@ if(NOT app_version MATCHES "^[0-9][0-9]\\.[0-9][0-9][0-9]\\.[0-9][0-9][0-9]$")
     message(FATAL_ERROR "sce_sys/param.json: contentVersion must be NN.NNN.NNN, not '${app_version}'")
 endif()
 set_property(DIRECTORY APPEND PROPERTY CMAKE_CONFIGURE_DEPENDS "${PORT_ROOT}/sce_sys/param.json")
+# Beside it, a build that is not a release says which one it is (tools/build-headless-native.sh:
+# branch@commit), kept to what a log line and the launcher's font show.
+set(EDEN_BUILD_LABEL "" CACHE STRING "Branch and commit of a build that is not a release; empty for a release")
+string(REGEX REPLACE "[^A-Za-z0-9._/+@-]" "-" build_label "${EDEN_BUILD_LABEL}")
+string(SUBSTRING "${build_label}" 0 48 build_label)
 write_derived("${PORT_BUILD_DIR}/version/app_version.h"
-    "// Generated from sce_sys/param.json (contentVersion).\n#pragma once\n#define EDEN_APP_VERSION \"${app_version}\"\n")
+    "// Generated from sce_sys/param.json (contentVersion) and EDEN_BUILD_LABEL.\n#pragma once\n#define EDEN_APP_VERSION \"${app_version}\"\n#define EDEN_BUILD_LABEL \"${build_label}\"\n")
 target_include_directories(eden-headless PRIVATE "${PORT_BUILD_DIR}/version")
 target_link_libraries(eden-headless PRIVATE core eden-pad)
 # A game's text entry on the PS5's own on-screen keyboard (system_keyboard.h, keyboard_applet.h).
