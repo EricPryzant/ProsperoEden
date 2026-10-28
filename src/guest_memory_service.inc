@@ -415,14 +415,15 @@ bool HandleGuestWriteFault(void* fault) noexcept {
     }
     SparseRange* const range = WriteRangeOf(address);
     if (range == nullptr) return false;
-    // The same address faulting again and again is not a slot to promote but a real fault.
+    // A slot that is already its own and not being changed, faulting again and again at the same
+    // address, is not a slot to promote but a real fault. Only those faults count: one address is
+    // promoted many times over a session when the scanner keeps giving its slot back (a buffer the
+    // GPU fence thread downloads zeroes into, once per scan pass), and each of those is a new write.
     static thread_local std::uintptr_t last = 0;
     static thread_local unsigned repeats = 0;
-    repeats = address == last ? repeats + 1 : 1;
-    last = address;
-    if (repeats > 16) {
+    if (address != last) {
+        last = address;
         repeats = 0;
-        return false;
     }
     counters.faults.fetch_add(1, std::memory_order_relaxed);
     const std::size_t slot = (address - range->begin.load(std::memory_order_relaxed)) / SparseSlot;
@@ -434,6 +435,11 @@ bool HandleGuestWriteFault(void* fault) noexcept {
         UnlockSlot(*range, slot, state);
         return true;
     }
+    if (state == SlotOwn && ++repeats > 16) {
+        UnlockSlot(*range, slot, state);
+        repeats = 0;
+        return false;
+    }
     bool ok = true;
     if (state == SlotFine) {
         ok = PromoteFine(*range, slot);
@@ -443,6 +449,7 @@ bool HandleGuestWriteFault(void* fault) noexcept {
     } else if (state == SlotShared) {
         ok = PromoteShared(*range, slot);
     }
+    if (ok && state != SlotOwn) repeats = 0;
     UnlockSlot(*range, slot, ok ? SlotOwn : state);
     if (!ok) {
         counters.failures.fetch_add(1, std::memory_order_relaxed);

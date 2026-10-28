@@ -1852,6 +1852,15 @@ static void CheckGuestMemoryService() {
     require(usage() <= before_scan - 2 * slot + 16384);
     base[21 * slot + 100000] = 4;
     require(Common::GuestMemorySlotState(21 * slot) == 1 && base[21 * slot + 9] == 3 && base[21 * slot + 100000] == 4);
+    // One thread writing zeroes at the start of a slot after every scan pass (a GPU download into a
+    // buffer of zeroes): the slot is given back and promoted again each time, at the same address,
+    // far more often than a fault that repeats is allowed to, and every one is a new write.
+    for (unsigned pass = 0; pass < 64; ++pass) {
+        reinterpret_cast<volatile std::uint8_t*>(base)[30 * slot] = 0;
+        require(Common::GuestMemorySlotState(30 * slot) == 1);
+        Common::GuestMemoryScanNow();
+        require(Common::GuestMemorySlotState(30 * slot) == 0);
+    }
     // Writers against the scanner: every location ends with what its thread wrote last, though
     // slots are fenced, given back and promoted again under them.
     {
