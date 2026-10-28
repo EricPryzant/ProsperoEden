@@ -479,6 +479,12 @@ class Services
         (void)percent;
     }
     virtual std::string version() = 0; // "v1.000.040"
+    // A build that is not a release: its branch and commit ("fix/x@8a221dc"), shown beside the
+    // version; empty for a release.
+    virtual std::string build_label()
+    {
+        return {};
+    }
     // A newer release than this one is listed (asked once per launch): handed over once, when the
     // answer has come.
     virtual bool take_update(UpdateOffer *)

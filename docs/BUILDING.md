@@ -153,6 +153,17 @@ package the release build needs is listed in `tools/ci/ubuntu-packages.txt`:
 sudo apt install --no-install-recommends $(grep -v '^#' tools/ci/ubuntu-packages.txt)
 ```
 
+## Telling builds apart
+
+A build that is not a release (no `v*` tag on its commit) carries a label beside its version: its
+branch and commit, and `+dirty` with changes that were not committed. The launcher shows
+`v1.005.000 private 8a221dc` where a release shows `v1.005.000`; the boot trace, the crash report
+and `EDEN_BUILD` in `stderr.log` give the branch too (`01.005.000 private fix/x@8a221dc`). A pull
+request's or a manual run's build on GitHub gets its branch's name and commit. The version itself
+is the same, so the update check and launcher packs see the release it is built on.
+`EDEN_BUILD_LABEL=<text>` sets the label (letters, digits and `._/+@-`, at most 48), and
+`EDEN_BUILD_LABEL=` builds without one.
+
 ## Crash reports
 
 When the app crashes it writes `crash-YYYYMMDD-HHMMSS.txt` to its logs folder

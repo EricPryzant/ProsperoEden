@@ -39,7 +39,26 @@ cdeps="$EDEN_NATIVE_C_DEPS"
 test -f "$cdeps/lib/libcrypto.a"
 ffmpeg="$scratch/ffmpeg-native/install"
 test -f "$ffmpeg/lib/libavcodec.a" || { echo 'Run tools/build-headless-ffmpeg.sh first.' >&2; exit 1; }
+# A build that is not a release says which one it is beside its version (headless/prosperoeden/
+# version.h): its branch and commit, +dirty with changes not committed. A release (a v* tag,
+# nothing changed) has none. EDEN_BUILD_LABEL, even empty, is used as it is.
+if [[ -z ${EDEN_BUILD_LABEL+set} ]]; then
+    EDEN_BUILD_LABEL=
+    dirty=
+    git -C "$root" diff --quiet HEAD -- headless tools src sce_sys 2>/dev/null || dirty=+dirty
+    if [[ ${GITHUB_REF_TYPE:-} != tag ]] &&
+       { [[ -n $dirty ]] || ! git -C "$root" describe --exact-match --tags --match 'v*' HEAD >/dev/null 2>&1; }; then
+        commit=$(git -C "$root" rev-parse --short=7 HEAD 2>/dev/null || echo source)
+        # A pull request's run checks out a merge commit; its second parent is the branch's own.
+        if [[ -n ${GITHUB_HEAD_REF:-} ]]; then commit=$(git -C "$root" rev-parse --short=7 HEAD^2 2>/dev/null || echo "$commit"); fi
+        branch=${GITHUB_HEAD_REF:-${GITHUB_REF_NAME:-$(git -C "$root" rev-parse --abbrev-ref HEAD 2>/dev/null || true)}}
+        [[ $branch == HEAD ]] && branch=
+        EDEN_BUILD_LABEL="${branch:+$branch@}$commit$dirty"
+    fi
+fi
+echo "== Build label: ${EDEN_BUILD_LABEL:-none (a release)}"
 cmake -S "$scratch/source" -B "$scratch/native-local" -G Ninja \
+    -DEDEN_BUILD_LABEL="$EDEN_BUILD_LABEL" \
     -DCMAKE_TOOLCHAIN_FILE="$root/headless/ps5.cmake" -DPS5_NATIVE=ON -DEDEN_DEVICE_FRONTEND="$devices" \
     -DCMAKE_BUILD_TYPE=Release -DENABLE_LTO=OFF \
     -DEDEN_PS5_VULKAN="${EDEN_PS5_VULKAN:-OFF}" \

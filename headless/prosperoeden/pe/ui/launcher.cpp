@@ -32,6 +32,10 @@ Launcher::Launcher(Services &services, Textures &textures, const Fonts &fonts, b
     : services_(services), textures_(textures), fonts_(fonts), first_start_(first_start)
 {
     version_ = services_.version();
+    // A build that is not a release says so beside its version: "v1.005.000 private 8a221dc" (a
+    // marker like the "v", not translated). The branch is in the logs and the crash report.
+    if (const std::string label = services_.build_label(); !label.empty())
+        version_ += " private " + label.substr(label.rfind('@') + 1);
     clock_ = services_.clock();
     prefs_ = services_.preferences();
     // The look the player chose; a theme this build does not have leaves the first in use.

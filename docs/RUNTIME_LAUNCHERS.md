@@ -105,7 +105,7 @@ can fail. Services and serialized fields are defined in
 | --- | --- |
 | `library`, `home`, `profiles` | Library snapshots, recents, setup status and current profile |
 | `preferences`, `choices`, `game_settings` | Global and per-game settings and supported choices |
-| `status` | Clock, real controller mask, multiplayer phase, launch/sync/update/keyboard state |
+| `status` | Clock, real controller mask, version and `build` (branch@commit of a build that is not a release, empty for one), multiplayer phase, launch/sync/update/keyboard state |
 | `game_files`, `mods`, `cheats`, `setup` | Folder information, a game's mods (each with `cheats_only` when it holds cheats alone), its cheats with the Cheats switch, and setup details |
 | `sources`, `downloads` | Remote-source catalog and native download queue |
 | `save_sync`, `save_sync_setup`, `pair_servers`, `pairing` | Native save synchronization and pairing |
